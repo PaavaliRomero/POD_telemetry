@@ -1,0 +1,21 @@
+# Compilación
+Debug/
+Release/
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+
+# CubeIDE
+.settings/
+.metadata/
+*.launch
+
+# Drivers autogenerados por CubeMX
+Drivers/CMSIS/
+Drivers/STM32F1xx_HAL_Driver/
+Middlewares/
+
