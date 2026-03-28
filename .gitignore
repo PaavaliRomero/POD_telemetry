@@ -1,0 +1,8 @@
+#Build
+build/
+sdkconfig.old
+# Dependencias ESP-IDF (se regeneran automáticamente)
+managed_components/
+# Archivos temporales
+*.log
+*.map
