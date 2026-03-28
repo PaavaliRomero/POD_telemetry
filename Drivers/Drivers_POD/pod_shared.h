@@ -35,6 +35,10 @@ extern volatile UI_state_enum pod_state_ui;
 /** @brief Estado actual de la FSM principal. */
 extern volatile pod_state_enum pod_state;
 
+/** @brief Flag de activación del IMU. 1 = activo, 0 = inactivo. */
+extern volatile uint8_t        imu_active;
 
+/** @brief Último tick de actividad para el cálculo del timeout de sleep. */
+extern uint32_t                last_activity_tick;
 
 #endif
