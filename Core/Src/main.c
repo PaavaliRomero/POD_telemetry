@@ -21,16 +21,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <math.h>
-#include <string.h>
-#include <stdio.h>
-
 #include "ssd1306.h"
 #include "mpu6050.h"
 #include "pod_imu.h"
 #include "pod_fsm.h"
 #include "pod_shared.h"
-#include "ui_oled.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
