@@ -24,4 +24,4 @@ STM32 ←── UART ──→ ESP32 ←── BLE ──→ Celular
 
 ## Estado del proyecto
 
-Trabajo en progreso.
+Trabajo en progreso -- ⚠️ Work in progress — active development.
