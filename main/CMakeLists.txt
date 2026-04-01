@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS    "blink_example_main.c"
+    SRCS    "pod_main.c"
             "src/modulo.c"
             "src/GPS_IDF.c"
             "src/UART_module.c"
