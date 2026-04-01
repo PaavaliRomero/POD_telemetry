@@ -1,7 +1,3 @@
-| | | | | | | | | | | | |  
-|-|-|-|-|-|-|-|-|-|-|-|-|  
-| **Supported Targets** | **ESP32** | **ESP32-C2** | **ESP32-C3** | **ESP32-C5** | **ESP32-C6** | **ESP32-C61** | **ESP32-H2** | **ESP32-H21** | **ESP32-P4** | **ESP32-S2** | **ESP32-S3** |   
-   
 **POD_042** ** – ESP32 firmware**  
 Central processing unit of the POD-042 system, implemented on an ESP32 DevKit V1.Responsible for BLE telemetry, STM32 communication, and system state management.  
 **Hardware Required**  
@@ -23,9 +19,9 @@ Central processing unit of the POD-042 system, implemented on an ESP32 DevKit V1
 | STM:BATT | Battery level request |   
 | STM:LED | LED toggle request |   
 | STM:MPU | IMU enable / disable toggle |   
-   
 **Menuconfig requirements**  
-   
+![menuconfig BLE configuration](assets/CMD_CONFIG_BLE.png)  
+![menuconfig BLE configuration](assets/CMD_CONFIG_BLE2.png)  
 **Build and Flash**  
 —TERMINAL—  
 #Set up ESP-IDF environment  
@@ -35,3 +31,6 @@ Central processing unit of the POD-042 system, implemented on an ESP32 DevKit V1
 #flash and monitor  
 **Idf.py flash monitor**  
 **Example Output**  
+![menuconfig BLE configuration](assets/CMD_EXAMPLE_CONECTION.png)  
+![menuconfig BLE configuration](assets/CMD_EXAMPLE_SHOW.png)  
+   
