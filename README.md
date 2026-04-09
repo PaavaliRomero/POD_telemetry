@@ -83,6 +83,7 @@ Compatible app: **Serial Bluetooth Terminal** (Android)
 ### Telemetry messages  
    
 ![menuconfig BLE configuration](assets/CMD_EXAMPLE_CONECTION.png)  
+![menuconfig BLE configuration](assets/CMD_EXAMPLE_SHOW.png)  
    
 ---  
    
