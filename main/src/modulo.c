@@ -7,7 +7,8 @@
 #define SERVO_PERIOD_US    20000 // 1/50Hz = 20ms
 
 
-void init_pwm_servoMotor(ledc_mode_t Led_mode, ledc_channel_t channel_led, ledc_timer_t timer_led, gpio_num_t GPIO_pin, int FREQ_timer, ledc_timer_bit_t Duty_res)
+void init_pwm_servoMotor(ledc_mode_t Led_mode, ledc_channel_t channel_led,
+                         ledc_timer_t timer_led, gpio_num_t GPIO_pin, int FREQ_timer, ledc_timer_bit_t Duty_res)
 {
     // Prepare and then apply the LEDC PWM timer configuration
     ledc_timer_config_t ledc_timer = {

@@ -39,7 +39,7 @@ void init_GPIO_Module(void)
 
 static void handle_rx(const char *msg)
 {	
-    if (strcmp(msg, "ESP:PING:RECIVE") == 0)
+    if (strcmp(msg, "ESP:PING:RECEIVE") == 0)
         ESP_LOGI(TAG, "[HB]  STM32 alive");
 
     else if (strcmp(msg, "ESP:LED:ON")  == 0)
@@ -127,9 +127,9 @@ static void handle_rx(const char *msg)
 				default: break;
 			}
 		}
+	}
     else
         ESP_LOGW(TAG, "[??] '%s'", msg);
-	}
 }
 
 /* ── FSM init ─────────────────────────────────── */

@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 static const char *TAG = "BLE_UART"; //mensaje para envio de consola.
+static char s_device_name[32] = "POD-9S";
 
 /* ── UUIDs del perfil Nordic UART Service (NUS) ─── */
 #define NUS_SERVICE_UUID        0xFFF0
@@ -115,7 +116,7 @@ static esp_ble_adv_params_t s_adv_params = {
 
 static void start_advertising(void)
 {
-    esp_ble_gap_set_device_name("POD-9S");
+    esp_ble_gap_set_device_name(s_device_name);
     esp_ble_adv_data_t adv_data = {
         .set_scan_rsp    = false,
         .include_name    = true,
@@ -207,6 +208,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 /* ── Inicialización ──────────────────────────────── */
 esp_err_t ble_uart_init(const char *device_name)
 {
+    strncpy(s_device_name, device_name, sizeof(s_device_name) - 1);
     esp_err_t ret;
 
     ret = nvs_flash_init();
@@ -248,6 +250,8 @@ esp_err_t ble_uart_init(const char *device_name)
     esp_ble_gap_register_callback(gap_event_handler);
     esp_ble_gatts_register_callback(gatts_event_handler);
     esp_ble_gatts_app_register(0);
+
+    start_advertising();
 
     ESP_LOGI(TAG, "BLE UART iniciado");
     return ESP_OK;

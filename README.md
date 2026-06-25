@@ -57,7 +57,7 @@ UART2 at 115200 baud, 8N1.
    
 | Message | Description |  
 |---------|-------------|  
-| `ESP:PING:RECIVE` | Heartbeat acknowledge |  
+| `ESP:PING:RECEIVE` | Heartbeat acknowledge |  
 | `ESP:LED:ON/OFF` | LED state confirmation |  
 | `ESP:ADC:BATT` | Battery measurement response |  
 | `IMU:ON / IMU:OFF` | IMU activation state |  

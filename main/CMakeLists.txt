@@ -11,6 +11,9 @@ idf_component_register(
                     "$ENV{IDF_PATH}/components/bt/host/bluedroid/api/include/api"
     REQUIRES
         driver
+        esp_driver_uart
+        esp_driver_gpio
+        esp_driver_ledc
         freertos
         bt
         nvs_flash
