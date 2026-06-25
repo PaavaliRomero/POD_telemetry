@@ -71,7 +71,7 @@ UART1 at 115200 baud, 8N1.
    
 | Command | Description |  
 |---------|-------------|  
-| `STM:PING` | Heartbeat request — responds with `ESP:PING:RECIVE` |  
+| `STM:PING` | Heartbeat request — responds with `ESP:PING:RECEIVE` |  
 | `STM:BATT` | Battery level request |  
 | `STM:LED` | LED toggle request |  
 | `STM:MPU` | IMU enable/disable toggle |  
@@ -80,7 +80,7 @@ UART1 at 115200 baud, 8N1.
    
 | Message | Description |  
 |---------|-------------|  
-| `ESP:PING:RECIVE` | Heartbeat acknowledge |  
+| `ESP:PING:RECEIVE` | Heartbeat acknowledge |  
 | `ESP:LED:ON/OFF` | LED state confirmation |  
 | `ESP:ADC:BATT` | Battery measurement response |  
 | `IMU:ON / IMU:OFF` | IMU activation state |  

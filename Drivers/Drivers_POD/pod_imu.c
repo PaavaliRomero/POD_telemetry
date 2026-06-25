@@ -97,6 +97,7 @@ void IMU_Processloop(void)
     else if (roll  < -IMU_ZONE_THRESH)   imu_zone = ZONE_LEFT;
     else if (pitch >  IMU_PITCH_THRESH)  imu_zone = ZONE_FORWARD;
     else if (pitch < -IMU_PITCH_THRESH)  imu_zone = ZONE_BACK;
+    else imu_zone = ZONE_FLAT;
 
     int16_t roll_i  = (int16_t)(roll  * 10.0f);
     int16_t pitch_i = (int16_t)(pitch * 10.0f);
@@ -109,7 +110,6 @@ void IMU_Processloop(void)
     if (imu_zone != imu_zone_prev) {
         imu_zone_prev = imu_zone;
     }
-    imu_zone = imu_zone;
 
     /*This function detect gestures*/
     IMU_DetectGesture(ax_raw, ay_raw, az_raw);

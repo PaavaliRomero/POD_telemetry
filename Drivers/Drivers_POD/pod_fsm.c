@@ -93,7 +93,7 @@ void POD_FSM_PING_func(void)
 	 *
 	 * */
 
-	HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:PING:RECIVE\n", strlen("ESP:PING:RECIVE\n"), 100);
+	HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:PING:RECEIVE\n", strlen("ESP:PING:RECEIVE\n"), 100);
 	HAL_Delay(100);
 }
 
