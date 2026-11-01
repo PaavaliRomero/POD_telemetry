@@ -18,11 +18,9 @@ extern void SystemClock_Config(void);
 
 /* ── Defines internos ───────────────────────────── */
 #define VREFINT_TYPICAL_mV 1200UL //Constante que permite realizar calulos de la bateria
-#define VREFINT_CAL_VREF_MV 3300UL //VDD usada por ST durante la calibracion de fabrica
-#define VREFINT_CAL_ADDR ((volatile const uint16_t *)0x1FFFF7BAUL)
 #define PRESCALER_ADC_CAL 4095UL //Prescalador de la bateria fijo 2 (12)
-#define BATT_EN_SETTLE_MS 6U
-#define ADC_READ_SAMPLES 16U
+#define BATT_EN_SETTLE_MS 6U //measure showed in terminal's time
+#define ADC_READ_SAMPLES 16U //samples measures
 #define ADC_CONVERSION_TIMEOUT_MS 2U
 
 static void BATT_EN_On(void)
@@ -85,7 +83,8 @@ void POD_FSM_BATT_func(void)
 {
 	/*
 	 * Calculate of voltage by battery.
-	 * NOTES: Batery needs a voltage between 3V to 5V.
+	 * NOTES: Batery needs a voltage between 3V to 5V. resolve
+	 * 		  Make a driver with two transistors and GPIPO_A8 able the driver
 	 * */
 
 	uint16_t adc_vrefint = 0;
@@ -102,13 +101,7 @@ void POD_FSM_BATT_func(void)
 		return;
 	}
 
-	uint16_t vrefint_cal = *VREFINT_CAL_ADDR;
-	uint32_t vdd_mv;
-
-	if ((vrefint_cal != 0U) && (vrefint_cal != 0xFFFFU))
-		vdd_mv = (VREFINT_CAL_VREF_MV * (uint32_t)vrefint_cal) / adc_vrefint;
-	else
-		vdd_mv = (VREFINT_TYPICAL_mV * PRESCALER_ADC_CAL) / adc_vrefint;
+	uint32_t vdd_mv = (VREFINT_TYPICAL_mV * PRESCALER_ADC_CAL) / adc_vrefint;
 
 	(void)ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5, &adc_vbatt);
 
