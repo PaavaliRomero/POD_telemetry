@@ -7,7 +7,6 @@
 #include <stdio.h>
 
 /* ── Periféricos externos de main.c ─────────────── */
-extern UART_HandleTypeDef huart1;
 extern MPU6050_Handle_t   mpu;
 
 /* ── IMU DEFINES ──────────────────────────── */
@@ -59,8 +58,7 @@ void IMU_DetectGesture(float ax, float ay, float az)
         (now - shake_last) > SHAKE_COOLDOWN)
     {
         shake_last = now;
-        HAL_UART_Transmit(&huart1,
-            (uint8_t*)"IMU:SHAKE\r\n", 11, 100);
+        POD_UART_Send("IMU:SHAKE\r\n");
     }
 
 }
@@ -78,8 +76,8 @@ void IMU_Processloop(void)
 	{
 		/*Check conection between devices*/
 
-		sprintf(msg, "Device not ready\r\n");
-		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+		snprintf(msg, MSG_LEN, "Device not ready\r\n");
+		POD_UART_Send(msg);
 		return;
 	}
 
@@ -104,7 +102,7 @@ void IMU_Processloop(void)
 
     /* --- Transmisión continua: zona + valores numéricos --- */
     snprintf(msg, MSG_LEN, "IMU:Z%d,R%d,P%d\r\n", (int)imu_zone, roll_i, pitch_i);
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+    POD_UART_Send(msg);
 
     /* Solo transmitir si cambió la zona */
     if (imu_zone != imu_zone_prev) {

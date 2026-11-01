@@ -10,13 +10,8 @@
 #include <stdio.h>
 
 /* ── Periféricos externos de main.c ─────────────── */
-extern UART_HandleTypeDef huart1;
 extern ADC_HandleTypeDef  hadc1;
 extern MPU6050_Handle_t   mpu;
-
-/* ── Variables externas de main.c ───────────────── */
-extern volatile uint8_t cmd_ready;
-extern char             cmd_buffer[];
 
 /* ── Funciones externas de main.c ───────────────── */
 extern void SystemClock_Config(void);
@@ -63,7 +58,7 @@ void POD_FSM_BATT_func(void)
 	uint32_t Vpin_mV		=	(ADC_vBATT * VDD_CONS_STM32)/PRESCALER_ADC_CAL;
 	VBATT = (uint16_t)(Vpin_mV * 2);
 
-	HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:ADC:BATT\n", strlen("ESP:ADC:BATT\n"), 100);
+	POD_UART_Send("ESP:ADC:BATT\n");
 }
 
 void POD_FSM_LED_func(void)
@@ -76,13 +71,13 @@ void POD_FSM_LED_func(void)
 	  {
 		  GPIOC->BSRR = (uint32_t)LED_Pin << 16;
 		  State_LED = 1;
-		  HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:LED:ON\n", strlen("ESP:LED:ON\n"),100);
+		  POD_UART_Send("ESP:LED:ON\n");
 	  }
 	  else
 	  {
 		  GPIOC->BSRR = LED_Pin;
 		  State_LED = 0;
-		  HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:LED:OFF\n", strlen("ESP:LED:OFF\n"),100);
+		  POD_UART_Send("ESP:LED:OFF\n");
 	  }
 }
 
@@ -93,7 +88,7 @@ void POD_FSM_PING_func(void)
 	 *
 	 * */
 
-	HAL_UART_Transmit(&huart1, (uint8_t*)"ESP:PING:RECEIVE\n", strlen("ESP:PING:RECEIVE\n"), 100);
+	POD_UART_Send("ESP:PING:RECEIVE\n");
 	HAL_Delay(100);
 }
 
@@ -103,23 +98,22 @@ void POD_FSM_MPU_Toggle_func(void)
     imu_active = !imu_active;   /* ESP32 activa o desactiva el IMU */
 
     if (imu_active)
-        HAL_UART_Transmit(&huart1, (uint8_t*)"IMU:ON\r\n", 8, 100);
+        POD_UART_Send("IMU:ON\r\n");
     else
-        HAL_UART_Transmit(&huart1, (uint8_t*)"IMU:OFF\r\n", 9, 100);
+        POD_UART_Send("IMU:OFF\r\n");
 }
 
 void POD_ModeSleep_Func(void)
 {
     ssd1306_SetDisplayOn(0);
-    HAL_UART_Transmit(&huart1, (uint8_t*)"STM:SLEEP\n", strlen("STM:SLEEP\n"), 100);
+    POD_UART_Send("STM:SLEEP\n");
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
     // CPU pausa aquí hasta que presiones el botón
     SystemClock_Config();
     MPU6050_ConfigModifi(&mpu);
     ssd1306_SetDisplayOn(1);
     last_activity_tick = HAL_GetTick();
-    HAL_UART_Transmit(&huart1, (uint8_t*)"STM:WAKE\n",
-                      strlen("STM:WAKE\n"), 100);
+    POD_UART_Send("STM:WAKE\n");
 }
 
 void FINITE_STATE_MACHINE_MAIN(void)
@@ -127,6 +121,8 @@ void FINITE_STATE_MACHINE_MAIN(void)
 	/*
 	 * Finite-state machine (FMS) MAIN LOGIC
 	 * */
+	char cmd[POD_CMD_BUF_SIZE];
+
 	switch(pod_state)
 	{
 		case POD_STATE_INIT:
@@ -146,24 +142,22 @@ void FINITE_STATE_MACHINE_MAIN(void)
 		    // Inactividad > 30s → apagar OLED únicamente por ahora
 		    if (elapsed > 60000U && !imu_active) POD_ModeSleep_Func();
 
-			if(cmd_ready)
+			if(POD_UART_TakeCommand(cmd, sizeof(cmd)))
 			{
-				cmd_ready = 0;
 			    Clear_Screen_ssd1306();
 
-				if		(strcmp(cmd_buffer, "STM:LED")==0)		POD_FSM_LED_func();
-				else if	(strcmp(cmd_buffer,"STM:PING")==0)		POD_FSM_PING_func();
-				else if	(strcmp(cmd_buffer, "STM:BATT")==0)		POD_FSM_BATT_func();
-				else if	(strcmp(cmd_buffer, "STM:MPU")==0)		POD_FSM_MPU_Toggle_func();
+				if		(strcmp(cmd, "STM:LED")==0)		POD_FSM_LED_func();
+				else if	(strcmp(cmd,"STM:PING")==0)		POD_FSM_PING_func();
+				else if	(strcmp(cmd, "STM:BATT")==0)		POD_FSM_BATT_func();
+				else if	(strcmp(cmd, "STM:MPU")==0)		POD_FSM_MPU_Toggle_func();
 				else	pod_state = POD_STATE_ERROR;
 			}
 
 		break;
 		case POD_STATE_ERROR:
 			pod_state_ui = POD_STATE_FaultScreen;
-			if(cmd_ready)
+			if(POD_UART_TakeCommand(cmd, sizeof(cmd)))
 			{
-				cmd_ready = 0;
 				pod_state = POD_STATE_IDLE;
 				pod_state_ui = POD_STATE_MainScreen;
 			}

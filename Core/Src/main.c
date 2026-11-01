@@ -26,6 +26,7 @@
 #include "pod_imu.h"
 #include "pod_fsm.h"
 #include "pod_shared.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,21 +68,77 @@ static void MX_ADC1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-#define CMD_BUF_SIZE 64 //Tamaño del arreglo que requiere recibir.
+#define CMD_BUF_SIZE POD_CMD_BUF_SIZE //Tamaño del arreglo que requiere recibir.
 
 /*── UART coneccition ──────────────────────── */
-uint8_t rx_byte;
+static uint8_t rx_byte;
 uint8_t Vbatt;
 
-volatile uint8_t cmd_ready;
-volatile uint8_t cmd_index = 0;
+static volatile uint8_t cmd_ready;
+static volatile uint8_t cmd_index = 0;
+static volatile uint8_t rx_rearm_pending = 0;
 
-char cmd_buffer[CMD_BUF_SIZE];
+static char cmd_buffer[CMD_BUF_SIZE];
 
 /*── MPU variables ─────────────────────────── */
 MPU6050_Handle_t mpu; //Sirve para el manejador del sensor.
 uint8_t whoami;
 
+static void POD_UART_StartRx(UART_HandleTypeDef *huart)
+{
+    if (HAL_UART_Receive_IT(huart, &rx_byte, 1) == HAL_OK)
+        rx_rearm_pending = 0;
+    else
+        rx_rearm_pending = 1;
+}
+
+int POD_UART_Send(const char *msg)
+{
+    if (msg == NULL)
+        return -1;
+
+    uint16_t len = (uint16_t)strlen(msg);
+
+    for (uint8_t attempt = 0; attempt < 3U; attempt++)
+    {
+        if (HAL_UART_Transmit(&huart1, (uint8_t *)msg, len, 100U) == HAL_OK)
+            return 0;
+
+        HAL_Delay(1U);
+    }
+
+    return -1;
+}
+
+uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len)
+{
+    uint8_t has_command = 0;
+
+    if (dst == NULL || max_len == 0U)
+        return 0;
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    if (cmd_ready)
+    {
+        uint16_t i = 0;
+
+        while ((i < (max_len - 1U)) && (cmd_buffer[i] != '\0'))
+        {
+            dst[i] = cmd_buffer[i];
+            i++;
+        }
+        dst[i] = '\0';
+        cmd_ready = 0;
+        has_command = 1;
+    }
+
+    if (primask == 0U)
+        __enable_irq();
+
+    return has_command;
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
@@ -108,8 +165,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         	}
 
         }
-        HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+        POD_UART_StartRx(huart);
+    }
+}
 
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        __HAL_UART_CLEAR_PEFLAG(huart);
+        POD_UART_StartRx(huart);
     }
 }
 /* USER CODE END 0 */
@@ -146,7 +211,7 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+  POD_UART_StartRx(&huart1);
   ssd1306_Init();
   MPU6050_Init(&mpu, &hi2c2, MPU6050_I2C_ADDR);
 
@@ -160,6 +225,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  if (rx_rearm_pending)
+		  POD_UART_StartRx(&huart1);
+
 	  /* MAIN STATE MACHINE FOR LOGIC*/
 	  FINITE_STATE_MACHINE_MAIN();
 	  /* MAIN UI FSM for image in screen*/

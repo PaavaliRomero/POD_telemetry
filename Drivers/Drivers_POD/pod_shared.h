@@ -5,6 +5,9 @@
 
 #include <stdint.h>
 
+/** @brief Tamaño máximo del buffer de comandos recibidos por UART. */
+#define POD_CMD_BUF_SIZE 64U
+
 /**
  * @brief Estados de la máquina de estados principal del POD.
  */
@@ -40,5 +43,20 @@ extern volatile uint8_t        imu_active;
 
 /** @brief Último tick de actividad para el cálculo del timeout de sleep. */
 extern uint32_t                last_activity_tick;
+
+/**
+ * @brief Envía un mensaje por UART1 al ESP32.
+ * @param msg Cadena terminada en '\0'.
+ * @return 0 si se transmitió, -1 si falló.
+ */
+int POD_UART_Send(const char *msg);
+
+/**
+ * @brief Copia de forma atómica el último comando recibido por UART.
+ * @param dst Buffer destino.
+ * @param max_len Tamaño del buffer destino.
+ * @return 1 si había un comando, 0 si no.
+ */
+uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len);
 
 #endif
