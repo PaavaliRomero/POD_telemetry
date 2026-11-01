@@ -18,31 +18,67 @@ extern void SystemClock_Config(void);
 
 /* ── Defines internos ───────────────────────────── */
 #define VREFINT_TYPICAL_mV 1200UL //Constante que permite realizar calulos de la bateria
+#define VREFINT_CAL_VREF_MV 3300UL //VDD usada por ST durante la calibracion de fabrica
+#define VREFINT_CAL_ADDR ((volatile const uint16_t *)0x1FFFF7BAUL)
 #define PRESCALER_ADC_CAL 4095UL //Prescalador de la bateria fijo 2 (12)
+#define BATT_EN_SETTLE_MS 6U
+#define ADC_READ_SAMPLES 16U
+#define ADC_CONVERSION_TIMEOUT_MS 2U
 
-uint16_t ADC_READ_CH(uint16_t channel, uint16_t sample_time)
+static void BATT_EN_On(void)
 {
-	/*
-	 * GET value of ADC1 but, get one channel value by one single medition.
-	 * */
+#if BATT_EN_ACTIVE_HIGH
+	HAL_GPIO_WritePin(BATT_EN_GPIO_Port, BATT_EN_Pin, GPIO_PIN_SET);
+#else
+	HAL_GPIO_WritePin(BATT_EN_GPIO_Port, BATT_EN_Pin, GPIO_PIN_RESET);
+#endif
+}
 
+static void BATT_EN_Off(void)
+{
+#if BATT_EN_ACTIVE_HIGH
+	HAL_GPIO_WritePin(BATT_EN_GPIO_Port, BATT_EN_Pin, GPIO_PIN_RESET);
+#else
+	HAL_GPIO_WritePin(BATT_EN_GPIO_Port, BATT_EN_Pin, GPIO_PIN_SET);
+#endif
+}
+
+static HAL_StatusTypeDef ADC_READ_CH(uint16_t channel, uint16_t sample_time, uint16_t *value)
+{
 	ADC_ChannelConfTypeDef sConfig = {0};
+
+	if (value == NULL)
+		return HAL_ERROR;
+
 	sConfig.Channel = channel;
 	sConfig.Rank = ADC_REGULAR_RANK_1;
 	sConfig.SamplingTime = sample_time;
-	HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+		return HAL_ERROR;
 
 	/*Make average the samples of ADC*/
 	uint32_t sum = 0;
-	for	(int i = 0; i< 16;i++){
-		HAL_ADC_Start(&hadc1);
-		HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	for (uint32_t i = 0; i < ADC_READ_SAMPLES; i++)
+	{
+		if (HAL_ADC_Start(&hadc1) != HAL_OK)
+			return HAL_ERROR;
+
+		if (HAL_ADC_PollForConversion(&hadc1, ADC_CONVERSION_TIMEOUT_MS) != HAL_OK)
+		{
+			(void)HAL_ADC_Stop(&hadc1);
+			return HAL_ERROR;
+		}
+
 		sum += HAL_ADC_GetValue(&hadc1);
-		HAL_ADC_Stop(&hadc1);
+
+		if (HAL_ADC_Stop(&hadc1) != HAL_OK)
+			return HAL_ERROR;
 	}
 
-	return (uint16_t)(sum / 16);
+	*value = (uint16_t)(sum / ADC_READ_SAMPLES);
 
+	return HAL_OK;
 }
 
 void POD_FSM_BATT_func(void)
@@ -52,13 +88,48 @@ void POD_FSM_BATT_func(void)
 	 * NOTES: Batery needs a voltage between 3V to 5V.
 	 * */
 
-	uint16_t ADC_vREFINT 	=	ADC_READ_CH(ADC_CHANNEL_VREFINT, ADC_SAMPLETIME_239CYCLES_5);
-	uint32_t VDD_CONS_STM32	=	(VREFINT_TYPICAL_mV * PRESCALER_ADC_CAL)/ADC_vREFINT;
-	uint16_t ADC_vBATT		=	ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5);
-	uint32_t Vpin_mV		=	(ADC_vBATT * VDD_CONS_STM32)/PRESCALER_ADC_CAL;
-	VBATT = (uint16_t)(Vpin_mV * 2);
+	uint16_t adc_vrefint = 0;
+	uint16_t adc_vbatt = 0;
+
+	BATT_EN_On();
+	HAL_Delay(BATT_EN_SETTLE_MS);
+
+	if ((ADC_READ_CH(ADC_CHANNEL_VREFINT, ADC_SAMPLETIME_239CYCLES_5, &adc_vrefint) != HAL_OK) ||
+	    (adc_vrefint == 0U))
+	{
+		BATT_EN_Off();
+		POD_UART_Send("ESP:ADC:BATT:ERR\n");
+		return;
+	}
+
+	uint16_t vrefint_cal = *VREFINT_CAL_ADDR;
+	uint32_t vdd_mv;
+
+	if ((vrefint_cal != 0U) && (vrefint_cal != 0xFFFFU))
+		vdd_mv = (VREFINT_CAL_VREF_MV * (uint32_t)vrefint_cal) / adc_vrefint;
+	else
+		vdd_mv = (VREFINT_TYPICAL_mV * PRESCALER_ADC_CAL) / adc_vrefint;
+
+	(void)ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5, &adc_vbatt);
+
+	if (ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5, &adc_vbatt) != HAL_OK)
+	{
+		BATT_EN_Off();
+		POD_UART_Send("ESP:ADC:BATT:ERR\n");
+		return;
+	}
+
+	BATT_EN_Off();
+
+	uint32_t vpin_mv = ((uint32_t)adc_vbatt * vdd_mv) / PRESCALER_ADC_CAL;
+	VBATT = (uint16_t)(vpin_mv * 2U);
 
 	POD_UART_Send("ESP:ADC:BATT\n");
+
+	char batt_msg[32];
+	int batt_len = snprintf(batt_msg, sizeof(batt_msg), "ESP:ADC:BATT:%u\n", (unsigned)VBATT);
+	if (batt_len > 0 && batt_len < (int)sizeof(batt_msg))
+		POD_UART_Send(batt_msg);
 }
 
 void POD_FSM_LED_func(void)
@@ -105,6 +176,7 @@ void POD_FSM_MPU_Toggle_func(void)
 
 void POD_ModeSleep_Func(void)
 {
+    BATT_EN_Off();
     ssd1306_SetDisplayOn(0);
     POD_UART_Send("STM:SLEEP\n");
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);

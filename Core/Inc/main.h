@@ -64,9 +64,11 @@ void Error_Handler(void);
 #define INT_SLEEP_EXTI_IRQn EXTI3_IRQn
 #define ADC_BATT_Pin GPIO_PIN_1
 #define ADC_BATT_GPIO_Port GPIOB
+#define BATT_EN_Pin GPIO_PIN_8
+#define BATT_EN_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-
+#define BATT_EN_ACTIVE_HIGH 1
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
