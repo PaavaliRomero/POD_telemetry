@@ -175,6 +175,7 @@ void POD_ModeSleep_Func(void)
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
     // CPU pausa aquí hasta que presiones el botón
     SystemClock_Config();
+    POD_UART_Resume();
     MPU6050_ConfigModifi(&mpu);
     ssd1306_SetDisplayOn(1);
     last_activity_tick = HAL_GetTick();
@@ -202,13 +203,10 @@ void FINITE_STATE_MACHINE_MAIN(void)
 		case POD_STATE_IDLE:
 
 			pod_state_ui = POD_STATE_MainScreen;
-		    uint32_t elapsed = HAL_GetTick() - last_activity_tick;
-
-		    // Inactividad > 30s → apagar OLED únicamente por ahora
-		    if (elapsed > 60000U && !imu_active) POD_ModeSleep_Func();
 
 			if(POD_UART_TakeCommand(cmd, sizeof(cmd)))
 			{
+			    last_activity_tick = HAL_GetTick();
 			    Clear_Screen_ssd1306();
 
 				if		(strcmp(cmd, "STM:LED")==0)		POD_FSM_LED_func();
@@ -218,11 +216,15 @@ void FINITE_STATE_MACHINE_MAIN(void)
 				else	pod_state = POD_STATE_ERROR;
 			}
 
+			if ((HAL_GetTick() - last_activity_tick) > 60000U && !imu_active)
+				POD_ModeSleep_Func();
+
 		break;
 		case POD_STATE_ERROR:
 			pod_state_ui = POD_STATE_FaultScreen;
 			if(POD_UART_TakeCommand(cmd, sizeof(cmd)))
 			{
+				last_activity_tick = HAL_GetTick();
 				pod_state = POD_STATE_IDLE;
 				pod_state_ui = POD_STATE_MainScreen;
 			}

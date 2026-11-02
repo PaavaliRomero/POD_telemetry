@@ -59,4 +59,9 @@ int POD_UART_Send(const char *msg);
  */
 uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len);
 
+/**
+ * @brief Rearma la recepción UART después de salir de STOP.
+ */
+void POD_UART_Resume(void);
+
 #endif

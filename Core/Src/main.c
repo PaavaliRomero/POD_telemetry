@@ -92,6 +92,18 @@ static void POD_UART_StartRx(UART_HandleTypeDef *huart)
         rx_rearm_pending = 1;
 }
 
+void POD_UART_Resume(void)
+{
+    (void)HAL_UART_AbortReceive(&huart1);
+    __HAL_UART_CLEAR_PEFLAG(&huart1);
+
+    cmd_ready = 0;
+    cmd_index = 0;
+    rx_rearm_pending = 0;
+
+    POD_UART_StartRx(&huart1);
+}
+
 int POD_UART_Send(const char *msg)
 {
     if (msg == NULL)
