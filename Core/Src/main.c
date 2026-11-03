@@ -69,16 +69,22 @@ static void MX_ADC1_Init(void);
 /* USER CODE BEGIN 0 */
 
 #define CMD_BUF_SIZE POD_CMD_BUF_SIZE //Tamaño del arreglo que requiere recibir.
+#define CMD_QUEUE_LEN 4U
 
 /*── UART coneccition ──────────────────────── */
 static uint8_t rx_byte;
 uint8_t Vbatt;
 
-static volatile uint8_t cmd_ready;
+static volatile uint8_t cmd_head = 0;
+static volatile uint8_t cmd_tail = 0;
+static volatile uint8_t cmd_count = 0;
+static volatile uint8_t cmd_active = 0;
+static volatile uint8_t cmd_discard = 0;
+static volatile uint8_t cmd_overflow = 0;
 static volatile uint8_t cmd_index = 0;
 static volatile uint8_t rx_rearm_pending = 0;
 
-static char cmd_buffer[CMD_BUF_SIZE];
+static char cmd_queue[CMD_QUEUE_LEN][CMD_BUF_SIZE];
 
 /*── MPU variables ─────────────────────────── */
 MPU6050_Handle_t mpu; //Sirve para el manejador del sensor.
@@ -97,7 +103,12 @@ void POD_UART_Resume(void)
     (void)HAL_UART_AbortReceive(&huart1);
     __HAL_UART_CLEAR_PEFLAG(&huart1);
 
-    cmd_ready = 0;
+    cmd_head = 0;
+    cmd_tail = 0;
+    cmd_count = 0;
+    cmd_active = 0;
+    cmd_discard = 0;
+    cmd_overflow = 0;
     cmd_index = 0;
     rx_rearm_pending = 0;
 
@@ -132,17 +143,18 @@ uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len)
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
 
-    if (cmd_ready)
+    if (cmd_count > 0U)
     {
         uint16_t i = 0;
 
-        while ((i < (max_len - 1U)) && (cmd_buffer[i] != '\0'))
+        while ((i < (max_len - 1U)) && (cmd_queue[cmd_tail][i] != '\0'))
         {
-            dst[i] = cmd_buffer[i];
+            dst[i] = cmd_queue[cmd_tail][i];
             i++;
         }
         dst[i] = '\0';
-        cmd_ready = 0;
+        cmd_tail = (uint8_t)((cmd_tail + 1U) % CMD_QUEUE_LEN);
+        cmd_count--;
         has_command = 1;
     }
 
@@ -165,17 +177,43 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     {
         if (rx_byte == '\n')
         {
-        	cmd_buffer[cmd_index] = '\0';
-        	cmd_ready = 1;
-        	cmd_index = 0;
+            if (cmd_active)
+            {
+                cmd_queue[cmd_head][cmd_index] = '\0';
+                cmd_head = (uint8_t)((cmd_head + 1U) % CMD_QUEUE_LEN);
+                cmd_count++;
+                cmd_active = 0;
+                cmd_index = 0;
+            }
+            cmd_discard = 0;
         }
         else
         {
-        	if(cmd_index < sizeof(cmd_buffer)-1)
-        	{
-        		cmd_buffer[cmd_index++] = rx_byte;
-        	}
+            if (!cmd_discard && !cmd_active)
+            {
+                if (cmd_count >= CMD_QUEUE_LEN)
+                {
+                    cmd_overflow = 1;
+                    cmd_discard = 1;
+                }
+                else
+                {
+                    cmd_active = 1;
+                    cmd_index = 0;
+                }
+            }
 
+            if (cmd_active)
+            {
+                if (cmd_index < (CMD_BUF_SIZE - 1U))
+                    cmd_queue[cmd_head][cmd_index++] = rx_byte;
+                else
+                {
+                    cmd_overflow = 1;
+                    cmd_discard = 1;
+                    cmd_active = 0;
+                }
+            }
         }
         POD_UART_StartRx(huart);
     }
