@@ -3,12 +3,13 @@
 #include "ble_uart.h"
 #include "UART_module.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include <string.h>
 
 #define TAG "POD_FSM"
 #define BUF_SIZE   128 /* buffer size */
 
-#define PING_MS    3000U   /* heartbeat each 3s */
+#define PING_MS    5000U   /* heartbeat each 5s */
 static uint32_t    last_ping  = 0;
 
 #define BATT_MS  30000U   /* time for send comand of read battery. */
@@ -19,6 +20,7 @@ static ESP_PodState state = ESP_STATE_INIT;
 static char rx[BUF_SIZE];
 
 static uint8_t imu_active = 0;   // 0 = sleep, 1 = active
+static uint8_t stm_sleeping = 0;
 
 /* ── Init GPIOs ────────────────────────────────────── */
 void init_GPIO_Module(void)
@@ -39,8 +41,26 @@ void init_GPIO_Module(void)
 
 static void handle_rx(const char *msg)
 {	
-    if (strcmp(msg, "ESP:PING:RECEIVE") == 0)
+    if (strcmp(msg, "STM:SLEEP") != 0)
+        stm_sleeping = 0;
+
+    if (strcmp(msg, "ESP:PING:RECEIVE") == 0) {
+        stm_sleeping = 0;
         ESP_LOGI(TAG, "[HB]  STM32 alive");
+    }
+    else if (strcmp(msg, "STM:SLEEP") == 0) {
+        stm_sleeping = 1;
+        ESP_LOGI(TAG, "[PWR] STM32 en STOP");
+        ble_uart_send("[POD 042] STM: SLEEP\n");
+    }
+    else if (strcmp(msg, "STM:WAKE") == 0) {
+        stm_sleeping = 0;
+        last_ping = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        last_batt = last_ping;
+        flag_batt = 1;
+        ESP_LOGI(TAG, "[PWR] STM32 despierto");
+        ble_uart_send("[POD 042] STM: WAKE\n");
+    }
 
     else if (strcmp(msg, "ESP:LED:ON")  == 0)
         ESP_LOGI(TAG, "[LED] ON");
@@ -50,8 +70,37 @@ static void handle_rx(const char *msg)
 
     else if (strcmp(msg, "ESP:ADC:BATT") == 0) {
         ESP_LOGI(TAG, "[BAT] respuesta recibida");
-         ble_uart_send("[POD 042] POWER CELL: OK\n");
-	}
+    }
+    else if (strncmp(msg, "ESP:ADC:BATT:", 13) == 0) {
+        const char *val = msg + 13;
+        unsigned mv = 0;
+
+        if (strcmp(val, "ERR") == 0) {
+            ESP_LOGW(TAG, "[BAT] error de lectura");
+            ble_uart_send("[POD 042] BATT: ERR\n");
+        }
+        else if (sscanf(val, "%u", &mv) == 1) {
+            char out[32];
+
+            ESP_LOGI(TAG, "[BAT] %u mV", mv);
+            snprintf(out, sizeof(out), "[POD 042] BATT: %u mV\n", mv);
+            ble_uart_send(out);
+        }
+        else {
+            ESP_LOGW(TAG, "[BAT] formato invalido: '%s'", msg);
+        }
+    }
+    else if (strncmp(msg, "ESP:ADC:RAW:", 12) == 0) {
+        unsigned vref = 0, vbatt = 0, vdd = 0;
+
+        if (sscanf(msg, "ESP:ADC:RAW:vref=%u,vbatt=%u,vdd=%u",
+                   &vref, &vbatt, &vdd) == 3) {
+            ESP_LOGI(TAG, "[ADC] vref=%u vbatt=%u vdd=%u", vref, vbatt, vdd);
+        }
+        else {
+            ESP_LOGW(TAG, "[ADC] RAW invalido: '%s'", msg);
+        }
+    }
 
     else if (strcmp(msg, "IMU:ON") == 0) {
         imu_active = 1;
@@ -159,6 +208,20 @@ void pod_fsm_run(void)
     }
     sw_last = sw_now;
 
+    uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    if (!stm_sleeping && now - last_ping > PING_MS) {
+        pod_send_cmd_STM32("STM:PING\n");
+        last_ping = now;
+    }
+
+    if (!stm_sleeping && (flag_batt || now - last_batt > BATT_MS)) {
+        flag_batt = 0;
+        ESP_LOGI(TAG, "[BAT] solicitando...");
+        pod_send_cmd_STM32("STM:BATT\n");
+        last_batt = now;
+    }
+
     switch (state)
     {
         case ESP_STATE_INIT:
@@ -167,19 +230,6 @@ void pod_fsm_run(void)
         break;
 
         case ESP_STATE_IDLE:
-        //Heartbeat by 3s
-            if (xTaskGetTickCount() * portTICK_PERIOD_MS - last_ping > PING_MS) {
-                pod_send_cmd_STM32("STM:PING\n");
-                last_ping = xTaskGetTickCount() * portTICK_PERIOD_MS;
-            }
-        //Get batery by 30s
-            if (flag_batt || xTaskGetTickCount() * portTICK_PERIOD_MS - last_batt > BATT_MS)
-			{
-				flag_batt = 0;
-				ESP_LOGI(TAG, "[BAT] solicitando...");
-				pod_send_cmd_STM32("STM:BATT\n");
-				last_batt = xTaskGetTickCount() * portTICK_PERIOD_MS;
-			}
         break;
 
         case ESP_STATE_IMU_ACTIVE:
