@@ -209,17 +209,29 @@ void FINITE_STATE_MACHINE_MAIN(void)
 
 			if(POD_UART_TakeCommand(cmd, sizeof(cmd)))
 			{
-			    last_activity_tick = HAL_GetTick();
-			    Clear_Screen_ssd1306();
+				uint8_t user_activity = 0;
 
-				if		(strcmp(cmd, "STM:LED")==0)		POD_FSM_LED_func();
+				if		(strcmp(cmd, "STM:LED")==0) {
+					Clear_Screen_ssd1306();
+					POD_FSM_LED_func();
+					user_activity = 1;
+				}
 				else if	(strcmp(cmd,"STM:PING")==0)		POD_FSM_PING_func();
 				else if	(strcmp(cmd, "STM:BATT")==0)		POD_FSM_BATT_func();
-				else if	(strcmp(cmd, "STM:MPU")==0)		POD_FSM_MPU_Toggle_func();
+				else if	(strcmp(cmd, "STM:MPU")==0) {
+					Clear_Screen_ssd1306();
+					POD_FSM_MPU_Toggle_func();
+					user_activity = 1;
+				}
 				else	pod_state = POD_STATE_ERROR;
+
+				if (user_activity)
+					last_activity_tick = HAL_GetTick();
 			}
 
-			if ((HAL_GetTick() - last_activity_tick) > 60000U && !imu_active)
+			if (!POD_UART_HasPendingCommand() &&
+				(HAL_GetTick() - last_activity_tick) > 60000U &&
+				!imu_active)
 				POD_ModeSleep_Func();
 
 		break;

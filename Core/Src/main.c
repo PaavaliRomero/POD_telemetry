@@ -164,6 +164,19 @@ uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len)
     return has_command;
 }
 
+uint8_t POD_UART_HasPendingCommand(void)
+{
+    uint8_t pending;
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    pending = (cmd_count > 0U) ? 1U : 0U;
+    if (primask == 0U)
+        __enable_irq();
+
+    return pending;
+}
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == GPIO_PIN_3) {

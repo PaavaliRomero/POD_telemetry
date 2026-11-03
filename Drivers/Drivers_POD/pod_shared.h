@@ -60,6 +60,12 @@ int POD_UART_Send(const char *msg);
 uint8_t POD_UART_TakeCommand(char *dst, uint16_t max_len);
 
 /**
+ * @brief Indica si hay comandos completos pendientes en la cola UART.
+ * @return 1 si hay al menos un comando pendiente, 0 si no.
+ */
+uint8_t POD_UART_HasPendingCommand(void);
+
+/**
  * @brief Rearma la recepción UART después de salir de STOP.
  */
 void POD_UART_Resume(void);
