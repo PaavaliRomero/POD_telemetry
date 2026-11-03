@@ -157,7 +157,6 @@ void POD_FSM_PING_func(void)
 	 * */
 
 	POD_UART_Send("ESP:PING:RECEIVE\n");
-	HAL_Delay(100);
 }
 
 void POD_FSM_MPU_Toggle_func(void)
