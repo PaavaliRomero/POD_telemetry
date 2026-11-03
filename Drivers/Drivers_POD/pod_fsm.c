@@ -17,9 +17,9 @@ extern MPU6050_Handle_t   mpu;
 extern void SystemClock_Config(void);
 
 /* ── Defines internos ───────────────────────────── */
-#define VREFINT_TYPICAL_mV 1200UL //Constante que permite realizar calulos de la bateria
+#define VREFINT_CAL_mV 1170UL
 #define PRESCALER_ADC_CAL 4095UL //Prescalador de la bateria fijo 2 (12)
-#define BATT_EN_SETTLE_MS 6U //measure showed in terminal's time
+#define BATT_EN_SETTLE_MS 6U
 #define ADC_READ_SAMPLES 16U //samples measures
 #define ADC_CONVERSION_TIMEOUT_MS 2U
 
@@ -101,9 +101,7 @@ void POD_FSM_BATT_func(void)
 		return;
 	}
 
-	uint32_t vdd_mv = (VREFINT_TYPICAL_mV * PRESCALER_ADC_CAL) / adc_vrefint;
-
-	(void)ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5, &adc_vbatt);
+	uint32_t vdd_mv = (VREFINT_CAL_mV * PRESCALER_ADC_CAL) / adc_vrefint;
 
 	if (ADC_READ_CH(ADC_CHANNEL_9, ADC_SAMPLETIME_239CYCLES_5, &adc_vbatt) != HAL_OK)
 	{
@@ -113,6 +111,12 @@ void POD_FSM_BATT_func(void)
 	}
 
 	BATT_EN_Off();
+
+	char raw_msg[80];
+	int raw_len = snprintf(raw_msg, sizeof(raw_msg), "ESP:ADC:RAW:vref=%u,vbatt=%u,vdd=%u\n",
+	                       (unsigned)adc_vrefint, (unsigned)adc_vbatt, (unsigned)vdd_mv);
+	if (raw_len > 0 && raw_len < (int)sizeof(raw_msg))
+		POD_UART_Send(raw_msg);
 
 	uint32_t vpin_mv = ((uint32_t)adc_vbatt * vdd_mv) / PRESCALER_ADC_CAL;
 	VBATT = (uint16_t)(vpin_mv * 2U);
