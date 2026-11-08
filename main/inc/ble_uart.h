@@ -34,6 +34,13 @@ esp_err_t ble_uart_init(const char *device_name);
 void      ble_uart_send(const char *msg);
 
 /**
+ * @brief Indica si hay un cliente conectado con notificaciones activas.
+ *
+ * @return true si la telemetria por BLE puede llegar al celular.
+ * */
+bool      ble_uart_is_notifying(void);
+
+/**
  * @brief Registra el callback que recibe los datos escritos por el
  *        cliente BLE en la caracteristica RX (0xFFF2).
  *

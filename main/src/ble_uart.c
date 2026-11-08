@@ -200,6 +200,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 				}
 				if (s_notify_enabled) {
 					ESP_LOGI(TAG, "Notificaciones: ON");
+					ble_uart_send("[POD 042] FW 2\n");
 					ble_uart_send("[POD 042] BOOTING TACTICAL SUPPORT UNIT...\n");
 					ble_uart_send("[POD 042] SYSTEM ONLINE.\n");
 				}
@@ -298,6 +299,11 @@ void ble_uart_send(const char *msg)
 bool ble_uart_is_connected(void)
 {
     return s_connected;
+}
+
+bool ble_uart_is_notifying(void)
+{
+    return s_connected && s_notify_enabled;
 }
 
 /* ── Callback de datos recibidos por BLE ─────────── */

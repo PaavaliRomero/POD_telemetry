@@ -20,11 +20,12 @@ static uint8_t flag_batt = 1;
 #define IMU_TELEMETRY_MS  500U   /* 2 Hz telemetry to BLE */
 static uint32_t last_imu_tx = 0;
 static uint32_t last_imu_rx = 0;
+static uint32_t last_imu_log = 0;
 
 /* ── Button timing ─────────────────────────────────── */
 #define BTN_DEBOUNCE_MS   30U
 #define BTN_LONG_MS       800U   /* long press → HOLD */
-#define BTN_DOUBLE_MS     350U   /* double click window → MPU toggle */
+#define BTN_DOUBLE_MS     500U   /* double click window → MPU toggle */
 
 static ESP_PodState state = ESP_STATE_INIT;
 static char rx[BUF_SIZE];
@@ -72,6 +73,7 @@ static uint8_t pod_cmd_if_awake(const char *cmd, const char *label)
     }
 
     pod_send_cmd_STM32(cmd);
+    ESP_LOGI(TAG, "[BTN] %s", label);
 
     char note[24];
     snprintf(note, sizeof(note), "[POD 042] BTN %.4s\n", label);
@@ -262,6 +264,14 @@ static void handle_rx(const char *msg)
                 state      = ESP_STATE_IMU_ACTIVE;
                 ESP_LOGI(TAG, "[IMU] activado (telemetria)");
             }
+
+            /* Visible on the serial terminal at 1 Hz to validate the link. */
+            if ((now - last_imu_log) >= 1000U) {
+                last_imu_log = now;
+                ESP_LOGI(TAG, "[IMU] R=%.1f P=%.1f L=%d BLE=%s",
+                         roll_i / 10.0f, pitch_i / 10.0f, imu_level,
+                         ble_uart_is_notifying() ? "on" : "off");
+            }
         }
         else {
             ESP_LOGW(TAG, "[IMU] telemetria invalida: '%s'", msg);
@@ -342,6 +352,8 @@ void pod_fsm_init(void)
     state = ESP_STATE_INIT;
     last_ping = pod_now_ms();
     last_batt = last_ping;
+
+    ESP_LOGI(TAG, "[BOOT] POD-9S build %s %s", __DATE__, __TIME__);
 
     ble_uart_init("POD-9S");
     ble_uart_set_rx_callback(ble_rx_handler);
