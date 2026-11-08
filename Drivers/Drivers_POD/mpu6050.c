@@ -47,9 +47,9 @@ MPU6050_Status_t MPU6050_ConfigModifi(MPU6050_Handle_t *dev)
 	MPU6050_WriteReg(dev, 0x00, MPU6050_REG_SMPLRT_DIV);
 	/*DLPF = 42Hz*/
 	MPU6050_WriteReg(dev, 0x03, MPU6050_REG_CONFIG_DLPF);
-	/*Gyro +- 500 dps*/
-	MPU6050_WriteReg(dev,MPU6050_Gyro_FS_500 , MPU6050_REG_GYRO_CONFIG);
-	dev->gyro_config = 500;
+	/*Gyro +- 250 dps*/
+	MPU6050_WriteReg(dev, MPU6050_Gyro_FS_250, MPU6050_REG_GYRO_CONFIG);
+	dev->gyro_config = 250;
 	/*Accel +-4g*/
 	MPU6050_WriteReg(dev, MPU6050_Accel_FS_4G, MPU6050_REG_ACCEL_CONFIG);
 	dev->accel_config = 4;
@@ -170,4 +170,36 @@ MPU6050_Status_t MPU6050_GetAccelXYZ(MPU6050_Handle_t *dev, MPU6050_Accel_t *acc
 	{
 		return MPU6050_ERROR;
 	}
+}
+
+MPU6050_Status_t MPU6050_GetMotion6(MPU6050_Handle_t *dev,
+                                    MPU6050_Accel_t *accel,
+                                    MPU6050_Gyro_t *gyro)
+{
+	uint8_t raw[14];
+
+	if (dev == NULL || dev->hi2c == NULL || accel == NULL || gyro == NULL)
+		return MPU6050_ERROR;
+
+	/* 0x3B..0x40: accel, 0x41..0x42: temp, 0x43..0x48: gyro */
+	if (HAL_I2C_Mem_Read(dev->hi2c,
+	                     dev->address,
+	                     MPU6050_REG_ACCEL_XOUT_H,
+	                     I2C_MEMADD_SIZE_8BIT,
+	                     raw,
+	                     14,
+	                     MPU6050_timeOUT) != HAL_OK)
+	{
+		return MPU6050_ERROR;
+	}
+
+	accel->ax = (int16_t)((raw[0]  << 8) | raw[1]);
+	accel->ay = (int16_t)((raw[2]  << 8) | raw[3]);
+	accel->az = (int16_t)((raw[4]  << 8) | raw[5]);
+
+	gyro->gx  = (int16_t)((raw[8]  << 8) | raw[9]);
+	gyro->gy  = (int16_t)((raw[10] << 8) | raw[11]);
+	gyro->gz  = (int16_t)((raw[12] << 8) | raw[13]);
+
+	return MPU6050_OK;
 }

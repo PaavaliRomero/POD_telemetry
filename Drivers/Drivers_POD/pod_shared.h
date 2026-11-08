@@ -41,6 +41,21 @@ extern volatile pod_state_enum pod_state;
 /** @brief Flag de activación del IMU. 1 = activo, 0 = inactivo. */
 extern volatile uint8_t        imu_active;
 
+/** @brief Ángulo roll filtrado y con tare aplicado, en grados. */
+extern volatile float          IMU_Roll;
+
+/** @brief Ángulo pitch filtrado y con tare aplicado, en grados. */
+extern volatile float          IMU_Pitch;
+
+/** @brief 1 si el nivel está dentro del umbral de nivelación; 0 si no. */
+extern volatile uint8_t        IMU_Level;
+
+/** @brief 1 si la lectura está congelada (hold manual o automático). */
+extern volatile uint8_t        IMU_Hold;
+
+/** @brief 1 si el giroscopio detecta movimiento; 0 si está quieto. */
+extern volatile uint8_t        IMU_Moving;
+
 /** @brief Último tick de actividad para el cálculo del timeout de sleep. */
 extern uint32_t                last_activity_tick;
 

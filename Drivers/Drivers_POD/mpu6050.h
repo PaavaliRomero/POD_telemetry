@@ -119,6 +119,22 @@ MPU6050_Status_t MPU6050_GetGyroXYZ(MPU6050_Handle_t *dev, MPU6050_Gyro_t *gyro)
 MPU6050_Status_t MPU6050_GetAccelXYZ(MPU6050_Handle_t *dev, MPU6050_Accel_t *accel);
 
 /**
+ * @brief Lee acelerómetro y giroscopio en una sola transacción I2C.
+ *
+ * @param *dev: Es el manejador del sensor.
+ * @param *accel: Estructura para guardar XYZ del acelerómetro.
+ * @param *gyro: Estructura para guardar XYZ del giroscopio.
+ *
+ * @return: MPU6050_OK si pudo obtener las mediciones.
+ * @return: MPU6050_ERROR si falló la lectura o algún puntero es NULL.
+ *
+ * @note: Lee 14 bytes desde ACCEL_XOUT_H; incluye temperatura entre ambos.
+ * */
+MPU6050_Status_t MPU6050_GetMotion6(MPU6050_Handle_t *dev,
+                                    MPU6050_Accel_t *accel,
+                                    MPU6050_Gyro_t *gyro);
+
+/**
  * @brief verifica si el sensor responde correctamente.
  *
  * @param *dev: Es el manejador del sensor.

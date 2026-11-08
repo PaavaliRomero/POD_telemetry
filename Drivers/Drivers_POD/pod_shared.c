@@ -8,5 +8,10 @@ volatile uint16_t VBATT = 0;
 volatile uint8_t State_LED = 0;
 
 volatile uint8_t  imu_active  = 0;
+volatile float    IMU_Roll    = 0.0f;
+volatile float    IMU_Pitch   = 0.0f;
+volatile uint8_t  IMU_Level   = 0;
+volatile uint8_t  IMU_Hold    = 0;
+volatile uint8_t  IMU_Moving  = 0;
 uint32_t last_activity_tick = 0;
 

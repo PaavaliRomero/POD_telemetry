@@ -8,6 +8,7 @@
 #include <pod_shared.h>
 
 static uint32_t main_last_tick = 0;
+static uint32_t level_last_tick = 0;
 static uint32_t anim_last_tick = 0; // for loading screen
 static uint8_t anim_y = 0; //time by come back animation (Loading Screen)
 static uint8_t anim_dir = 1;  // 1 = up, 0 = down
@@ -175,6 +176,76 @@ uint8_t BATT_GetPercent(uint16_t vbatt_mv)
 	return (uint8_t)((vbatt_mv - 3000) * 100/1200);
 }
 
+static void POD_UI_FormatAngle(char *buf, size_t buf_len, char axis, float angle)
+{
+	int32_t v = (int32_t)(angle * 10.0f + (angle >= 0.0f ? 0.5f : -0.5f));
+	char sign = (v < 0) ? '-' : '+';
+
+	if (v < 0)
+		v = -v;
+
+	snprintf(buf, buf_len, "%c:%c%02ld.%ld", axis, sign,
+	         (long)(v / 10), (long)(v % 10));
+}
+
+static void POD_UI_LevelScreen(void)
+{
+	if (HAL_GetTick() - level_last_tick < 100U)
+		return;
+
+	level_last_tick = HAL_GetTick();
+
+	Clear_Screen_ssd1306();
+
+	char roll_buf[16];
+	char pitch_buf[16];
+	char batt_buf[8];
+
+	POD_UI_FormatAngle(roll_buf, sizeof(roll_buf), 'R', IMU_Roll);
+	POD_UI_FormatAngle(pitch_buf, sizeof(pitch_buf), 'P', IMU_Pitch);
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString(roll_buf, Font_7x10, White);
+	ssd1306_SetCursor(0, 10);
+	ssd1306_WriteString(pitch_buf, Font_7x10, White);
+
+	snprintf(batt_buf, sizeof(batt_buf), "%u%%",
+	         (unsigned)BATT_GetPercent(VBATT));
+	ssd1306_SetCursor(84, 0);
+	ssd1306_WriteString(batt_buf, Font_7x10, White);
+	ssd1306_DrawBitmap(112, 0, POD_UI_SelectBattIcon(VBATT), 16, 10, White);
+
+	const uint8_t cx = 64;
+	const uint8_t cy = 32;
+	const uint8_t radius = 16;
+
+	ssd1306_DrawCircle(cx, cy, radius, White);
+	ssd1306_Line(cx - radius + 2, cy, cx + radius - 2, cy, White);
+	ssd1306_Line(cx, cy - radius + 2, cx, cy + radius - 2, White);
+
+	int16_t dx = (int16_t)(IMU_Roll * 2.0f);
+	int16_t dy = (int16_t)(IMU_Pitch * 2.0f);
+
+	if (dx > (radius - 4))  dx = (radius - 4);
+	if (dx < -(radius - 4)) dx = -(radius - 4);
+	if (dy > (radius - 4))  dy = (radius - 4);
+	if (dy < -(radius - 4)) dy = -(radius - 4);
+
+	ssd1306_FillCircle((uint8_t)(cx + dx), (uint8_t)(cy + dy), 3, White);
+
+	char *status = "TILT";
+	if (IMU_Hold)
+		status = "HOLD";
+	else if (IMU_Level)
+		status = "LEVEL";
+	else if (IMU_Moving)
+		status = "MOVING";
+
+	ssd1306_SetCursor(44, 52);
+	ssd1306_WriteString(status, Font_7x10, White);
+	ssd1306_UpdateScreen();
+}
+
 void POD_UI_MainScreen(void)
 {
 	/* MAIN SCREEN
@@ -185,6 +256,12 @@ void POD_UI_MainScreen(void)
 
 	if(pod_state_ui != POD_STATE_MainScreen)
 		return;
+
+	if (imu_active)
+	{
+		POD_UI_LevelScreen();
+		return;
+	}
 
 	if(HAL_GetTick() - main_last_tick < 500)
 		return;

@@ -46,4 +46,16 @@ void IMU_Processloop(void);
  */
 void IMU_DetectGesture(float ax, float ay, float az);
 
+/**
+ * @brief Fija la inclinación actual como referencia cero.
+ * @note  Reinicia el hold y la referencia de movimiento.
+ */
+void IMU_Tare(void);
+
+/**
+ * @brief Alterna el hold manual de la lectura.
+ * @note  El hold manual tiene prioridad sobre el auto-hold.
+ */
+void IMU_HoldToggle(void);
+
 #endif

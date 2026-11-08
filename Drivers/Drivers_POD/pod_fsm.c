@@ -41,6 +41,42 @@ static void BATT_EN_Off(void)
 #endif
 }
 
+/* LED activo en bajo: ON = pin a 0, OFF = pin a 1. */
+static void POD_FSM_LED_Set(uint8_t on)
+{
+	if (on)
+		GPIOC->BSRR = (uint32_t)LED_Pin << 16;
+	else
+		GPIOC->BSRR = LED_Pin;
+
+	State_LED = on ? 1U : 0U;
+}
+
+static uint8_t level_led_was_active = 0;
+
+static void POD_FSM_LED_UpdateLevel(void)
+{
+	if (!imu_active)
+	{
+		if (level_led_was_active && State_LED)
+		{
+			POD_FSM_LED_Set(0);
+			POD_UART_Send("ESP:LED:OFF\n");
+		}
+		level_led_was_active = 0;
+		return;
+	}
+
+	level_led_was_active = 1;
+
+	uint8_t desired = IMU_Level ? 1U : 0U;
+	if (desired != State_LED)
+	{
+		POD_FSM_LED_Set(desired);
+		POD_UART_Send(desired ? "ESP:LED:ON\n" : "ESP:LED:OFF\n");
+	}
+}
+
 static HAL_StatusTypeDef ADC_READ_CH(uint16_t channel, uint16_t sample_time, uint16_t *value)
 {
 	ADC_ChannelConfTypeDef sConfig = {0};
@@ -165,9 +201,16 @@ void POD_FSM_MPU_Toggle_func(void)
     imu_active = !imu_active;   /* ESP32 activa o desactiva el IMU */
 
     if (imu_active)
+    {
         POD_UART_Send("IMU:ON\r\n");
+    }
     else
+    {
+        IMU_Level  = 0;
+        IMU_Hold   = 0;
+        IMU_Moving = 0;
         POD_UART_Send("IMU:OFF\r\n");
+    }
 }
 
 void POD_ModeSleep_Func(void)
@@ -223,11 +266,23 @@ void FINITE_STATE_MACHINE_MAIN(void)
 					POD_FSM_MPU_Toggle_func();
 					user_activity = 1;
 				}
+				else if	(strcmp(cmd, "STM:TARE")==0) {
+					if (imu_active)
+						IMU_Tare();
+					user_activity = 1;
+				}
+				else if	(strcmp(cmd, "STM:HOLD")==0) {
+					if (imu_active)
+						IMU_HoldToggle();
+					user_activity = 1;
+				}
 				else	pod_state = POD_STATE_ERROR;
 
 				if (user_activity)
 					last_activity_tick = HAL_GetTick();
 			}
+
+			POD_FSM_LED_UpdateLevel();
 
 			if (!POD_UART_HasPendingCommand() &&
 				(HAL_GetTick() - last_activity_tick) > 60000U &&
