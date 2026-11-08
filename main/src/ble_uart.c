@@ -22,9 +22,12 @@ static char s_device_name[32] = "POD-9S";
 static uint16_t s_gatts_if          = 0;
 static uint16_t s_conn_id           = 0;
 static uint16_t s_tx_char_handle    = 0;
+static uint16_t s_rx_char_handle    = 0;
 static uint16_t s_cccd_handle       = 0;
 static bool     s_connected         = false;
 static bool     s_notify_enabled    = false;
+
+static ble_uart_rx_cb_t s_rx_cb     = NULL;
 
 /* ── Tabla de atributos GATT ─────────────────────── */
 enum {
@@ -169,6 +172,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 memcpy(s_handle_table, param->add_attr_tab.handles,
                        sizeof(s_handle_table));
                 s_tx_char_handle = s_handle_table[IDX_TX_VAL];
+                s_rx_char_handle = s_handle_table[IDX_RX_VAL];
                 s_cccd_handle    = s_handle_table[IDX_TX_CFG];
                 esp_ble_gatts_start_service(s_handle_table[IDX_SVC]);
                 start_advertising();
@@ -191,12 +195,29 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
 
 		case ESP_GATTS_WRITE_EVT:
 			if (param->write.handle == s_cccd_handle) {
-				s_notify_enabled = (param->write.value[0] == 0x01);
+				if (param->write.len >= 1) {
+					s_notify_enabled = (param->write.value[0] == 0x01);
+				}
 				if (s_notify_enabled) {
 					ESP_LOGI(TAG, "Notificaciones: ON");
 					ble_uart_send("[POD 042] BOOTING TACTICAL SUPPORT UNIT...\n");
 					ble_uart_send("[POD 042] SYSTEM ONLINE.\n");
 				}
+				else {
+					ESP_LOGI(TAG, "Notificaciones: OFF");
+				}
+			}
+			else if (param->write.handle == s_rx_char_handle) {
+				/* Comando escrito por el celular: se reenvia al STM32. */
+				if (!param->write.is_prep && s_rx_cb != NULL &&
+				    param->write.len > 0) {
+					s_rx_cb((const char *)param->write.value,
+					        param->write.len);
+				}
+			}
+			else {
+				ESP_LOGW(TAG, "write en handle desconocido: %u",
+				         param->write.handle);
 			}
 			break;
 
@@ -233,6 +254,10 @@ esp_err_t ble_uart_init(const char *device_name)
 
     ret = esp_bluedroid_enable();
     if (ret != ESP_OK) return ret;
+
+    /* Preferir un MTU mayor para notificaciones y escrituras largas.
+     * El cliente puede seguir usando el MTU por defecto (23). */
+    esp_ble_gatt_set_local_mtu(185);
 
     // whitout PIN - Just Works
     esp_ble_auth_req_t auth_req = ESP_LE_AUTH_NO_BOND;
@@ -273,6 +298,12 @@ void ble_uart_send(const char *msg)
 bool ble_uart_is_connected(void)
 {
     return s_connected;
+}
+
+/* ── Callback de datos recibidos por BLE ─────────── */
+void ble_uart_set_rx_callback(ble_uart_rx_cb_t cb)
+{
+    s_rx_cb = cb;
 }
 
 /* ── Deinicialización ────────────────────────────── */

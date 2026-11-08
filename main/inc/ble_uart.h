@@ -1,6 +1,7 @@
 #pragma once
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 /** 
  * @brief Inicia el stack de BLE y comienza advertising del POD.
@@ -31,6 +32,18 @@ esp_err_t ble_uart_init(const char *device_name);
  * @see ble_uart_is_connected()
  * */
 void      ble_uart_send(const char *msg);
+
+/**
+ * @brief Registra el callback que recibe los datos escritos por el
+ *        cliente BLE en la caracteristica RX (0xFFF2).
+ *
+ * @param cb Funcion llamada con el buffer y su longitud. No se agrega
+ *           terminador '\0'; el callback debe copiar/validar los datos.
+ *
+ * @note Permite reenviar comandos del celular al STM32.
+ * */
+typedef void (*ble_uart_rx_cb_t)(const char *data, uint16_t len);
+void      ble_uart_set_rx_callback(ble_uart_rx_cb_t cb);
 
 /** 
  * @brief Verifica la actualizacion del cliente

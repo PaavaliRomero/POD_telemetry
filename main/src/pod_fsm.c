@@ -3,6 +3,7 @@
 #include "ble_uart.h"
 #include "UART_module.h"
 #include "esp_log.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -13,14 +14,29 @@
 static uint32_t    last_ping  = 0;
 
 #define BATT_MS  30000U   /* time for send comand of read battery. */
-static uint32_t last_batt = 0; 
+static uint32_t last_batt = 0;
 static uint8_t flag_batt = 1;
+
+#define IMU_TELEMETRY_MS  500U   /* 2 Hz telemetry to BLE */
+static uint32_t last_imu_tx = 0;
+static uint32_t last_imu_rx = 0;
+
+/* ── Button timing ─────────────────────────────────── */
+#define BTN_DEBOUNCE_MS   30U
+#define BTN_LONG_MS       800U   /* long press → HOLD */
+#define BTN_DOUBLE_MS     350U   /* double click window → MPU toggle */
 
 static ESP_PodState state = ESP_STATE_INIT;
 static char rx[BUF_SIZE];
 
-static uint8_t imu_active = 0;   // 0 = sleep, 1 = active
-static uint8_t stm_sleeping = 0;
+static uint8_t imu_active = 0;      // 0 = sleep, 1 = active
+static volatile uint8_t stm_sleeping = 0;
+
+/* Last telemetry received from the STM32. */
+static int      imu_level   = 0;
+static int      imu_roll_i  = 0;
+static int      imu_pitch_i = 0;
+static uint8_t  imu_have_data = 0;
 
 /* ── Init GPIOs ────────────────────────────────────── */
 void init_GPIO_Module(void)
@@ -33,14 +49,116 @@ void init_GPIO_Module(void)
     .pull_down_en = GPIO_PULLDOWN_DISABLE,
     .intr_type    = GPIO_INTR_DISABLE,
 	};
-	
+
 	gpio_config(&sw_cfg);
+}
+
+/* ── Helpers ───────────────────────────────────────── */
+
+static uint32_t pod_now_ms(void)
+{
+    return xTaskGetTickCount() * portTICK_PERIOD_MS;
+}
+
+/*
+ * Send a command to the STM32 only if it is awake.
+ * Commands sent while it is in STOP are lost (UART is not armed yet).
+ */
+static uint8_t pod_cmd_if_awake(const char *cmd, const char *label)
+{
+    if (stm_sleeping) {
+        ESP_LOGW(TAG, "[CMD] STM32 dormido, se descarta: %s", label);
+        return 0;
+    }
+
+    pod_send_cmd_STM32(cmd);
+
+    char note[24];
+    snprintf(note, sizeof(note), "[POD 042] BTN %.4s\n", label);
+    ble_uart_send(note);
+    return 1;
+}
+
+/* ── Telemetry to BLE ──────────────────────────────── */
+
+static void pod_send_imu_telemetry(void)
+{
+    char line[32];
+
+    /* Worst case: "IMU R-1800 P-900 L0\n" = 20 bytes (default ATT MTU). */
+    snprintf(line, sizeof(line), "IMU R%d P%d L%d\n",
+             imu_roll_i, imu_pitch_i, imu_level);
+
+    ble_uart_send(line);
+}
+
+/* ── BLE RX → STM32 forwarding ─────────────────────── */
+
+static void ble_rx_handler(const char *data, uint16_t len)
+{
+    char cmd[32];
+    size_t n = 0;
+
+    /* Trim CR/LF/spaces on both ends. */
+    while (len > 0 && (data[0] == '\r' || data[0] == '\n' ||
+                       data[0] == ' '  || data[0] == '\t' ||
+                       data[0] == '\0')) {
+        data++;
+        len--;
+    }
+    while (len > 0 && (data[len - 1] == '\r' || data[len - 1] == '\n' ||
+                       data[len - 1] == ' '  || data[len - 1] == '\t' ||
+                       data[len - 1] == '\0')) {
+        len--;
+    }
+
+    if (len == 0)
+        return;
+
+    /* Copy in uppercase and ignore a leading "STM:". */
+    for (size_t i = 0; i < len && n < (sizeof(cmd) - 1); i++) {
+        char c = (char)toupper((unsigned char)data[i]);
+        if (c == '\0' || c == '\r' || c == '\n')
+            break;
+        cmd[n++] = c;
+    }
+    cmd[n] = '\0';
+
+    const char *body = cmd;
+    if (strncmp(body, "STM:", 4) == 0)
+        body += 4;
+
+    /* Only accept commands the STM32 knows; anything else puts it in ERROR. */
+    if (strcmp(body, "TARE") != 0 && strcmp(body, "HOLD") != 0 &&
+        strcmp(body, "MPU")  != 0 && strcmp(body, "PING") != 0 &&
+        strcmp(body, "BATT") != 0 && strcmp(body, "LED")  != 0) {
+        ESP_LOGW(TAG, "[BLE] comando no valido: '%s'", cmd);
+        ble_uart_send("[POD 042] CMD INVALID\n");
+        return;
+    }
+
+    if (stm_sleeping) {
+        ESP_LOGW(TAG, "[BLE] STM32 dormido, se descarta: %s", body);
+        ble_uart_send("[POD 042] STM SLEEPING\n");
+        return;
+    }
+
+    char out[40];
+    snprintf(out, sizeof(out), "STM:%s\n", body);
+    ESP_LOGI(TAG, "[BLE] TX %s", out);
+    pod_send_cmd_STM32(out);
+
+    char note[24];
+    snprintf(note, sizeof(note), "[POD 042] CMD %.4s\n", body);
+    ble_uart_send(note);
 }
 
 /* ── Message parser for STM32 ──────────────────────── */
 
 static void handle_rx(const char *msg)
-{	
+{
+    uint32_t now = pod_now_ms();
+
     if (strcmp(msg, "STM:SLEEP") != 0)
         stm_sleeping = 0;
 
@@ -50,13 +168,16 @@ static void handle_rx(const char *msg)
     }
     else if (strcmp(msg, "STM:SLEEP") == 0) {
         stm_sleeping = 1;
+        imu_active   = 0;
+        imu_have_data = 0;
+        state        = ESP_STATE_IDLE;
         ESP_LOGI(TAG, "[PWR] STM32 en STOP");
         ble_uart_send("[POD 042] STM: SLEEP\n");
     }
     else if (strcmp(msg, "STM:WAKE") == 0) {
         stm_sleeping = 0;
-        last_ping = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        last_batt = last_ping;
+        last_ping = now;
+        last_batt = now;
         flag_batt = 1;
         ESP_LOGI(TAG, "[PWR] STM32 despierto");
         ble_uart_send("[POD 042] STM: WAKE\n");
@@ -103,112 +224,140 @@ static void handle_rx(const char *msg)
     }
 
     else if (strcmp(msg, "IMU:ON") == 0) {
-        imu_active = 1;
-        state = ESP_STATE_IMU_ACTIVE;
+        imu_active    = 1;
+        imu_have_data = 0;      /* waits ~2.5 s for gyro bias calibration */
+        last_imu_rx   = now;
+        state         = ESP_STATE_IMU_ACTIVE;
         ESP_LOGI(TAG, "[IMU] activado");
-		ble_uart_send("[POD 042] OPERATOR STATUS: ACTIVE\n");
+        ble_uart_send("[POD 042] OPERATOR STATUS: ACTIVE\n");
     }
     else if (strcmp(msg, "IMU:OFF") == 0) {
-        imu_active = 0;
-        state = ESP_STATE_IDLE; 
+        imu_active    = 0;
+        imu_have_data = 0;
+        imu_level     = 0;
+        state         = ESP_STATE_IDLE;
         ESP_LOGI(TAG, "[IMU] desactivado");
         ble_uart_send("[POD 042] OPERATOR STATUS: IDLE\n");
     }
 
-    // SHAKE — IMU toggle
-    else if (strcmp(msg, "IMU:SHAKE") == 0) {
-        pod_send_cmd_STM32("STM:MPU\n");   // toggle en STM32
-        ESP_LOGI(TAG, "[IMU] %s", imu_active ? "*** SHAKE — apagando ***"
-                                             : "*** SHAKE — encendiendo ***");
+    /*
+     * Level telemetry from STM32: "IMU:L<level>,R<roll*10>,P<pitch*10>".
+     * Example: "IMU:L0,R49,P8" → 4.9° roll, 0.8° pitch, not level.
+     */
+    else if (strncmp(msg, "IMU:L", 5) == 0) {
+        int lvl = 0;
+        int roll_i = 0;
+        int pitch_i = 0;
+
+        if (sscanf(msg, "IMU:L%d,R%d,P%d", &lvl, &roll_i, &pitch_i) == 3) {
+            imu_level     = (lvl != 0) ? 1 : 0;
+            imu_roll_i    = roll_i;
+            imu_pitch_i   = pitch_i;
+            imu_have_data = 1;
+            last_imu_rx   = now;
+
+            if (!imu_active) {
+                /* Re-sync if an IMU:ON notification was missed. */
+                imu_active = 1;
+                state      = ESP_STATE_IMU_ACTIVE;
+                ESP_LOGI(TAG, "[IMU] activado (telemetria)");
+            }
+        }
+        else {
+            ESP_LOGW(TAG, "[IMU] telemetria invalida: '%s'", msg);
+        }
     }
 
-    // Zones — Run it only if the IMU is active.
-	else if (strncmp(msg, "IMU:Z", 5) == 0) {
-		static int zona_prev = -1;
-		int zona   = 0;
-		int roll_i = 0;
-		int pitch_i = 0;
-
-		// New format parser: IMU:Z%d,R%d,P%d
-		int parsed = sscanf(msg, "IMU:Z%d,R%d,P%d", &zona, &roll_i, &pitch_i);
-
-		// If the zone sends the old format, do it the same way.
-		float roll  = (parsed >= 2) ? roll_i  / 10.0f : 0.0f;
-		float pitch = (parsed >= 3) ? pitch_i / 10.0f : 0.0f;
-
-		switch (zona) {
-			case 0:  // NEUTRAL
-				ESP_LOGI(TAG, "[IMU] NEUTRAL — idle (R:%.1f P:%.1f)", roll, pitch);
-				break;
-			case 1:  // RIGHT
-				ESP_LOGI(TAG, "[IMU] RIGHT (R:%.1f P:%.1f)", roll, pitch);
-				pod_send_cmd_STM32("STM:LED\n"); 
-				break;
-			case 2:  // LEFT
-				ESP_LOGI(TAG, "[IMU] LEFT (R:%.1f P:%.1f)", roll, pitch); 
-				break;
-			case 3:  // FORWARD
-				ESP_LOGI(TAG, "[IMU] FORWARD (R:%.1f P:%.1f)", roll, pitch);
-				pod_send_cmd_STM32("STM:PING\n"); 
-				break;
-			case 4:  // BACK
-				ESP_LOGI(TAG, "[IMU] BACK (R:%.1f P:%.1f)", roll, pitch);
-				pod_send_cmd_STM32("STM:MPU\n"); 
-				break;
-			case 5:  // FACEDOWN
-				ESP_LOGI(TAG, "[IMU] FACEDOWN — reservado"); 
-				break;
-			default:
-				ESP_LOGW(TAG, "[IMU] zona desconocida: %d", zona);
-				break;
-		}
-		
-		// Telemetría solo cuando cambia la zona
-		if (zona != zona_prev) {
-			zona_prev = zona;
-			switch (zona) {
-        case 0: ble_uart_send("[POD 042] ORIENTATION: VECTOR NEUTRAL\n"); break;
-        case 1: ble_uart_send("[POD 042] ORIENTATION: VECTOR RIGHT\n");   break;
-        case 2: ble_uart_send("[POD 042] ORIENTATION: VECTOR LEFT\n");    break;
-        case 3: ble_uart_send("[POD 042] ORIENTATION: VECTOR FORWARD\n"); break;
-        case 4: ble_uart_send("[POD 042] ORIENTATION: VECTOR BACK\n");    break;
-				case 5: ble_uart_send("[POD 042] ALERT: UNIT INVERTED. RECOMMEND REPOSITION.\n"); break;
-				default: break;
-			}
-		}
-	}
     else
         ESP_LOGW(TAG, "[??] '%s'", msg);
+}
+
+/* ── Button: short = TARE, long = HOLD, double = MPU ─ */
+
+static void button_task(uint32_t now)
+{
+    uint8_t raw = gpio_get_level(SWITCH_GPIO);
+
+    static uint8_t  btn_raw_last      = 1;
+    static uint8_t  btn_stable        = 1;
+    static uint32_t btn_raw_change_ms = 0;
+    static uint32_t btn_press_ms      = 0;
+    static uint32_t btn_release_ms    = 0;
+    static uint8_t  btn_long_fired    = 0;
+    static uint8_t  btn_clicks        = 0;
+
+    /* Debounce the raw level. */
+    if (raw != btn_raw_last) {
+        btn_raw_last      = raw;
+        btn_raw_change_ms = now;
+    }
+
+    if (raw != btn_stable &&
+        (now - btn_raw_change_ms) >= BTN_DEBOUNCE_MS) {
+        btn_stable = raw;
+
+        if (btn_stable == 0) {
+            /* Press. */
+            btn_press_ms   = now;
+            btn_long_fired = 0;
+        }
+        else {
+            /* Release. */
+            btn_release_ms = now;
+
+            if (!btn_long_fired) {
+                if (btn_clicks == 0) {
+                    btn_clicks = 1;      /* wait for possible second click */
+                }
+                else {
+                    btn_clicks = 0;
+                    pod_cmd_if_awake("STM:MPU\n", "MPU");
+                }
+            }
+            btn_long_fired = 0;
+        }
+    }
+
+    /* Long press: fire HOLD once, before releasing. */
+    if (btn_stable == 0 && !btn_long_fired &&
+        (now - btn_press_ms) >= BTN_LONG_MS) {
+        btn_long_fired = 1;
+        btn_clicks     = 0;
+        pod_cmd_if_awake("STM:HOLD\n", "HOLD");
+    }
+
+    /* Single click: TARE after the double-click window expires.
+     * Do not fire while a new press is in progress (it may become a
+     * long press or the second click of a double click). */
+    if (btn_stable == 1 && btn_clicks == 1 &&
+        (now - btn_release_ms) >= BTN_DOUBLE_MS) {
+        btn_clicks = 0;
+        pod_cmd_if_awake("STM:TARE\n", "TARE");
+    }
 }
 
 /* ── FSM init ─────────────────────────────────── */
 void pod_fsm_init(void)
 {
     state = ESP_STATE_INIT;
-    last_ping = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    last_batt = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    
+    last_ping = pod_now_ms();
+    last_batt = last_ping;
+
     ble_uart_init("POD-9S");
+    ble_uart_set_rx_callback(ble_rx_handler);
     ble_uart_send("[POD 042] SYSTEM ONLINE\n");
 }
 
 void pod_fsm_run(void)
 {
+    uint32_t now = pod_now_ms();
+
     // Read STM32.
     int len = pod_read_line(rx, BUF_SIZE, 10);
     if (len > 0) handle_rx(rx);
 
-    // Read button.
-    static uint8_t sw_last = 1;   // 1 = open (pull-up)
-    uint8_t sw_now = gpio_get_level(SWITCH_GPIO);
-
-    if (sw_last == 1 && sw_now == 0) {
-        // falling endge — toogle do it.
-        pod_send_cmd_STM32("STM:MPU\n");
-    }
-    sw_last = sw_now;
-
-    uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    // Read button (short / long / double click).
+    button_task(now);
 
     if (!stm_sleeping && now - last_ping > PING_MS) {
         pod_send_cmd_STM32("STM:PING\n");
@@ -222,6 +371,14 @@ void pod_fsm_run(void)
         last_batt = now;
     }
 
+    // Telemetry to BLE at 2 Hz while the IMU is active and fresh.
+    if (imu_active && !stm_sleeping && imu_have_data &&
+        (now - last_imu_rx) < 1000U &&
+        (now - last_imu_tx) >= IMU_TELEMETRY_MS) {
+        last_imu_tx = now;
+        pod_send_imu_telemetry();
+    }
+
     switch (state)
     {
         case ESP_STATE_INIT:
@@ -233,7 +390,7 @@ void pod_fsm_run(void)
         break;
 
         case ESP_STATE_IMU_ACTIVE:
-            /* handle_rx() process IMU:Zx / auto-IMU:SHAKE */
+            /* Telemetry is sent above; parser updates the level state. */
         break;
 
         case ESP_STATE_ERROR:
