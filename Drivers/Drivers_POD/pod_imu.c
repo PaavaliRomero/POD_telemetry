@@ -212,21 +212,27 @@ void IMU_Processloop(void)
     float gy_s = gyro.gy / GYRO_SCALE_250DPS;
     float gz_s = gyro.gz / GYRO_SCALE_250DPS;
 
-    /* ── Remapeo por montaje vertical del MPU6050 ──────────────────
-     * El sensor está soldado de pie: su eje +X queda vertical y apunta
-     * hacia arriba cuando el dispositivo está nivelado.
-     * Se rota el marco con una permutación cíclica (det = +1):
+    /* ── Remapeo por montaje en la caja ───────────────────────────
+     * El MPU6050 va sobre una cara lateral larga, de cabeza respecto
+     * al montaje original del protoboard. Su eje +X queda vertical y
+     * apunta hacia abajo cuando la caja apoya sobre su base.
+     *
+     * Partiendo del remapeo vertical original:
      *     Xv = +Y_s    Yv = +Z_s    Zv = +X_s
+     * se compone un giro de 180° sobre el eje virtual Y para que +Z
+     * vuelva a apuntar hacia arriba (det = +1):
+     *     Xv = -Y_s    Yv = +Z_s    Zv = -X_s
+     *
      * Se aplica igual al acelerómetro y al giroscopio para que el
      * filtro complementario reciba ejes coherentes.
      * ──────────────────────────────────────────────────────────── */
-    float ax =  ay_s;
+    float ax = -ay_s;
     float ay =  az_s;
-    float az =  ax_s;
+    float az = -ax_s;
 
-    float gx =  gy_s;
+    float gx = -gy_s;
     float gy =  gz_s;
-    float gz =  gx_s;
+    float gz = -gx_s;
 
     float roll_acc  = atan2f(ay, az) * 180.0f / (float)M_PI - tare_roll;
     float pitch_acc = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI - tare_pitch;
