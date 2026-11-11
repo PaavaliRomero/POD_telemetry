@@ -45,8 +45,11 @@ MPU6050_Status_t MPU6050_ConfigModifi(MPU6050_Handle_t *dev)
 	MPU6050_WriteReg(dev, 0x01, MPU6050_REG_PWR_MGMT1);
 	/*Sample Rate = 1kHz*/
 	MPU6050_WriteReg(dev, 0x00, MPU6050_REG_SMPLRT_DIV);
-	/*DLPF = 42Hz*/
-	MPU6050_WriteReg(dev, 0x03, MPU6050_REG_CONFIG_DLPF);
+	/* DLPF = 21 Hz (accel) / 20 Hz (gyro).
+	 * El lazo muestrea a 20 Hz; 42 Hz dejaba pasar vibración que
+	 * luego aparecía como aliasing. Para más suavizado usar 0x05
+	 * (10 Hz); para más respuesta usar 0x03 (42 Hz). */
+	MPU6050_WriteReg(dev, 0x04, MPU6050_REG_CONFIG_DLPF);
 	/*Gyro +- 250 dps*/
 	MPU6050_WriteReg(dev, MPU6050_Gyro_FS_250, MPU6050_REG_GYRO_CONFIG);
 	dev->gyro_config = 250;
