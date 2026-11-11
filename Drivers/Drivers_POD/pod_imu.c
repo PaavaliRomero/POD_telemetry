@@ -28,6 +28,20 @@ extern MPU6050_Handle_t mpu;
 #define LEVEL_ON_DEG             2.0f
 #define LEVEL_OFF_DEG            3.0f
 
+/* ── Robustez contra golpes, vibración y ruido ──────────────────
+ * Un golpe o una caída producen muestras fuera de rango. Se
+ * descartan antes de tocar el filtro. La magnitud de gravedad en
+ * reposo es ~1 g; se acepta solo una ventana razonable. */
+#define ACCEL_VALID_MIN_G        0.60f
+#define ACCEL_VALID_MAX_G        1.40f
+
+/* Debounce del estado LEVEL: un golpe breve no debe apagar el LED. */
+#define LEVEL_ON_DEBOUNCE_MS     200U
+#define LEVEL_OFF_DEBOUNCE_MS    400U
+
+/* Tras varios fallos seguidos del bus I2C, reconfigurar el MPU. */
+#define IMU_I2C_FAIL_LIMIT       5U
+
 #define ALPHA_MOVING             0.98f
 #define ALPHA_STILL              0.95f
 
@@ -54,7 +68,15 @@ static uint8_t  moving            = 0;
 static uint8_t  hold_manual       = 0;
 static uint8_t  hold_auto         = 0;
 static uint8_t  auto_hold_armed   = 1;
+static uint8_t  live_override     = 0;  /* LIVE: publicar siempre el valor filtrado */
 static uint8_t  level_state       = 0;
+
+static uint8_t  level_on_pending   = 0;
+static uint8_t  level_off_pending  = 0;
+static uint32_t level_on_tick      = 0;
+static uint32_t level_off_tick     = 0;
+
+static uint8_t  i2c_fail_count     = 0;
 
 static uint32_t imu_last_tick      = 0;
 static uint32_t last_motion_tick   = 0;
@@ -98,7 +120,15 @@ static void IMU_ResetRuntime(void)
     hold_manual      = 0;
     hold_auto        = 0;
     auto_hold_armed  = 1;
+    live_override    = 0;
     level_state      = 0;
+
+    level_on_pending   = 0;
+    level_off_pending  = 0;
+    level_on_tick      = HAL_GetTick();
+    level_off_tick     = HAL_GetTick();
+
+    i2c_fail_count     = 0;
 
     imu_last_tick       = HAL_GetTick();
     last_motion_tick    = HAL_GetTick();
@@ -121,6 +151,9 @@ void IMU_Tare(void)
     auto_hold_armed = 0;
     level_state     = 0;
 
+    level_on_pending  = 0;
+    level_off_pending = 0;
+
     IMU_Roll   = 0.0f;
     IMU_Pitch  = 0.0f;
     IMU_Level  = 0;
@@ -141,6 +174,41 @@ void IMU_HoldToggle(void)
     }
 
     IMU_Hold = (hold_manual || hold_auto) ? 1U : 0U;
+}
+
+/**
+ * @brief Alterna el modo LIVE: desactiva el auto-hold indefinidamente.
+ *
+ * Con el auto-hold activo la telemetria repite el ultimo valor congelado,
+ * lo que impide medir el ruido real del sensor. En modo LIVE la salida se
+ * actualiza siempre con el valor del filtro.
+ *
+ * Se mantiene aunque se ejecute TARE (el cero cambia, el modo de
+ * visualizacion no). Se pierde al reiniciar el IMU o en el auto-off.
+ */
+void IMU_LiveToggle(void)
+{
+    live_override = live_override ? 0 : 1;
+
+    if (live_override)
+    {
+        /* El cambio debe notarse de inmediato: soltar cualquier hold. */
+        hold_manual     = 0;
+        hold_auto       = 0;
+        auto_hold_armed = 0;
+    }
+    else
+    {
+        /* Al salir, permitir que el auto-hold vuelva a actuar. */
+        auto_hold_armed = 1;
+    }
+
+    IMU_Hold = (hold_manual || hold_auto) ? 1U : 0U;
+}
+
+uint8_t IMU_LiveState(void)
+{
+    return live_override;
 }
 
 void IMU_DetectGesture(float ax, float ay, float az)
@@ -202,7 +270,23 @@ void IMU_Processloop(void)
     MPU6050_Gyro_t  gyro;
 
     if (MPU6050_GetMotion6(&mpu, &accel, &gyro) != MPU6050_OK)
+    {
+        i2c_fail_count++;
+
+        if (i2c_fail_count >= IMU_I2C_FAIL_LIMIT)
+        {
+            i2c_fail_count = 0;
+
+            /* El bus pudo quedar colgado o el MPU reiniciado por ruido
+             * en los cables. Reaplicar la configuración. */
+            MPU6050_ConfigModifi(&mpu);
+            POD_UART_Send("IMU:I2C:RECOVER\r\n");
+        }
+
         return;
+    }
+
+    i2c_fail_count = 0;
 
     float ax_s = accel.ax / ACCEL_SCALE_4G;
     float ay_s = accel.ay / ACCEL_SCALE_4G;
@@ -211,6 +295,33 @@ void IMU_Processloop(void)
     float gx_s = gyro.gx / GYRO_SCALE_250DPS;
     float gy_s = gyro.gy / GYRO_SCALE_250DPS;
     float gz_s = gyro.gz / GYRO_SCALE_250DPS;
+
+    /* ── Validación de muestra ────────────────────────────────────
+     * Un golpe, una caída o una lectura corrupta del bus producen
+     * magnitudes imposibles. Se descartan sin tocar el filtro.
+     * La magnitud no cambia con el remapeo, por eso se valida aquí. */
+    float accel_mag_s = sqrtf(ax_s*ax_s + ay_s*ay_s + az_s*az_s);
+
+    if (accel_mag_s < ACCEL_VALID_MIN_G || accel_mag_s > ACCEL_VALID_MAX_G)
+    {
+        if (!bias_ready)
+        {
+            /* No calibrar el bias con muestras inválidas. */
+            bias_sum_x = 0.0f;
+            bias_sum_y = 0.0f;
+            bias_sum_z = 0.0f;
+            bias_count = 0;
+        }
+
+        last_motion_tick   = now;
+        last_activity_tick = now;
+        moving             = 1;
+        hold_auto          = 0;
+        auto_hold_armed    = 1;
+        IMU_Moving         = 1;
+
+        return;
+    }
 
     /* ── Remapeo por montaje en la caja ───────────────────────────
      * El MPU6050 va sobre una cara lateral larga, de cabeza respecto
@@ -237,7 +348,7 @@ void IMU_Processloop(void)
     float roll_acc  = atan2f(ay, az) * 180.0f / (float)M_PI - tare_roll;
     float pitch_acc = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI - tare_pitch;
 
-    float accel_mag = sqrtf(ax*ax + ay*ay + az*az);
+    float accel_mag = accel_mag_s;
 
     /* ── Calibración de bias del giroscopio ───────── */
     if (!bias_ready)
@@ -319,7 +430,7 @@ void IMU_Processloop(void)
                 + (1.0f - alpha) * pitch_acc;
 
     /* ── Auto-hold ────────────────────────────────── */
-    if (auto_hold_armed && !hold_manual && !moving &&
+    if (!live_override && auto_hold_armed && !hold_manual && !moving &&
         (now - last_motion_tick) > AUTO_HOLD_MS)
     {
         hold_auto = 1;
@@ -344,15 +455,50 @@ void IMU_Processloop(void)
     float abs_roll  = fabsf(IMU_Roll);
     float abs_pitch = fabsf(IMU_Pitch);
 
+    uint8_t in_band  = (abs_roll <= LEVEL_ON_DEG)  && (abs_pitch <= LEVEL_ON_DEG);
+    uint8_t out_band = (abs_roll >  LEVEL_OFF_DEG) || (abs_pitch >  LEVEL_OFF_DEG);
+
     if (level_state)
     {
-        if (abs_roll > LEVEL_OFF_DEG || abs_pitch > LEVEL_OFF_DEG)
-            level_state = 0;
+        /* Para apagar: la salida de banda debe sostenerse en el tiempo. */
+        if (out_band)
+        {
+            if (!level_off_pending)
+            {
+                level_off_pending = 1;
+                level_off_tick    = now;
+            }
+            else if ((now - level_off_tick) >= LEVEL_OFF_DEBOUNCE_MS)
+            {
+                level_state       = 0;
+                level_off_pending = 0;
+            }
+        }
+        else
+        {
+            level_off_pending = 0;
+        }
     }
     else
     {
-        if (abs_roll <= LEVEL_ON_DEG && abs_pitch <= LEVEL_ON_DEG)
-            level_state = 1;
+        /* Para encender: la entrada a banda debe sostenerse en el tiempo. */
+        if (in_band)
+        {
+            if (!level_on_pending)
+            {
+                level_on_pending = 1;
+                level_on_tick    = now;
+            }
+            else if ((now - level_on_tick) >= LEVEL_ON_DEBOUNCE_MS)
+            {
+                level_state      = 1;
+                level_on_pending = 0;
+            }
+        }
+        else
+        {
+            level_on_pending = 0;
+        }
     }
 
     IMU_Level = level_state;
@@ -366,8 +512,8 @@ void IMU_Processloop(void)
         int16_t pitch_i = (int16_t)(IMU_Pitch * 10.0f);
         char msg[MSG_LEN];
 
-        snprintf(msg, MSG_LEN, "IMU:L%d,R%d,P%d\r\n",
-                 (int)IMU_Level, roll_i, pitch_i);
+        snprintf(msg, MSG_LEN, "IMU:L%d,R%d,P%d,H%d,M%d\r\n",
+                 (int)IMU_Level, roll_i, pitch_i, (int)IMU_Hold, (int)IMU_Moving);
         POD_UART_Send(msg);
     }
 
@@ -380,7 +526,11 @@ void IMU_Processloop(void)
         hold_manual     = 0;
         hold_auto       = 0;
         auto_hold_armed = 0;
+        live_override   = 0;
         level_state     = 0;
+
+        level_on_pending  = 0;
+        level_off_pending = 0;
 
         IMU_ClearOutputs();
         last_activity_tick = now;

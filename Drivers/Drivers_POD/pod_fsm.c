@@ -276,6 +276,13 @@ void FINITE_STATE_MACHINE_MAIN(void)
 						IMU_HoldToggle();
 					user_activity = 1;
 				}
+				else if	(strcmp(cmd, "STM:LIVE")==0) {
+					if (imu_active) {
+						IMU_LiveToggle();
+						POD_UART_Send(IMU_LiveState() ? "ESP:LIVE:ON\n" : "ESP:LIVE:OFF\n");
+					}
+					user_activity = 1;
+				}
 				else	pod_state = POD_STATE_ERROR;
 
 				if (user_activity)

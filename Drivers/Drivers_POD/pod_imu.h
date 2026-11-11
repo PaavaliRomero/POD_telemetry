@@ -58,4 +58,19 @@ void IMU_Tare(void);
  */
 void IMU_HoldToggle(void);
 
+/**
+ * @brief Alterna el modo LIVE (desactiva el auto-hold indefinidamente).
+ *
+ * Con el auto-hold la telemetria repite el ultimo valor congelado, lo que
+ * impide medir el ruido real. En LIVE la salida se actualiza siempre.
+ * No se pierde al ejecutar TARE; si se pierde al reiniciar el IMU o en
+ * el auto-off.
+ */
+void IMU_LiveToggle(void);
+
+/**
+ * @brief Devuelve 1 si el modo LIVE esta activo, 0 si no.
+ */
+uint8_t IMU_LiveState(void);
+
 #endif
