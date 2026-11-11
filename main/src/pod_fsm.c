@@ -18,6 +18,8 @@ static uint32_t last_batt = 0;
 static uint8_t flag_batt = 1;
 
 #define IMU_TELEMETRY_MS  500U   /* 2 Hz telemetry to BLE */
+/* 1000 ms = 1 Hz (legible). Bajar a 100 para capturar ruido a 10 Hz. */
+#define IMU_LOG_MS        100U // 1000U
 static uint32_t last_imu_tx = 0;
 static uint32_t last_imu_rx = 0;
 static uint32_t last_imu_log = 0;
@@ -37,6 +39,8 @@ static volatile uint8_t stm_sleeping = 0;
 static int      imu_level   = 0;
 static int      imu_roll_i  = 0;
 static int      imu_pitch_i = 0;
+static int      imu_hold_i  = 0;   /* 1 = valor congelado por auto/manual hold */
+static int      imu_mov_i   = 0;   /* 1 = el STM32 detecta movimiento */
 static uint8_t  imu_have_data = 0;
 
 /* ── Init GPIOs ────────────────────────────────────── */
@@ -133,7 +137,8 @@ static void ble_rx_handler(const char *data, uint16_t len)
     /* Only accept commands the STM32 knows; anything else puts it in ERROR. */
     if (strcmp(body, "TARE") != 0 && strcmp(body, "HOLD") != 0 &&
         strcmp(body, "MPU")  != 0 && strcmp(body, "PING") != 0 &&
-        strcmp(body, "BATT") != 0 && strcmp(body, "LED")  != 0) {
+        strcmp(body, "BATT") != 0 && strcmp(body, "LED")  != 0 &&
+        strcmp(body, "LIVE") != 0) {
         ESP_LOGW(TAG, "[BLE] comando no valido: '%s'", cmd);
         ble_uart_send("[POD 042] CMD INVALID\n");
         return;
@@ -243,18 +248,28 @@ static void handle_rx(const char *msg)
     }
 
     /*
-     * Level telemetry from STM32: "IMU:L<level>,R<roll*10>,P<pitch*10>".
-     * Example: "IMU:L0,R49,P8" → 4.9° roll, 0.8° pitch, not level.
+     * Level telemetry from STM32:
+     *   "IMU:L<level>,R<roll*10>,P<pitch*10>,H<hold>,M<moving>"
+     * Example: "IMU:L0,R49,P8,H0,M0" → 4.9° roll, 0.8° pitch, not level,
+     * live reading (H0) and no motion detected (M0).
+     * The H/M fields are optional: older firmware sends only L,R,P.
      */
     else if (strncmp(msg, "IMU:L", 5) == 0) {
         int lvl = 0;
         int roll_i = 0;
         int pitch_i = 0;
+        int hold_i = 0;
+        int mov_i = 0;
 
-        if (sscanf(msg, "IMU:L%d,R%d,P%d", &lvl, &roll_i, &pitch_i) == 3) {
+        int fields = sscanf(msg, "IMU:L%d,R%d,P%d,H%d,M%d",
+                            &lvl, &roll_i, &pitch_i, &hold_i, &mov_i);
+
+        if (fields >= 3) {
             imu_level     = (lvl != 0) ? 1 : 0;
             imu_roll_i    = roll_i;
             imu_pitch_i   = pitch_i;
+            imu_hold_i    = (fields >= 4) ? ((hold_i != 0) ? 1 : 0) : 0;
+            imu_mov_i     = (fields >= 5) ? ((mov_i  != 0) ? 1 : 0) : 0;
             imu_have_data = 1;
             last_imu_rx   = now;
 
@@ -265,17 +280,25 @@ static void handle_rx(const char *msg)
                 ESP_LOGI(TAG, "[IMU] activado (telemetria)");
             }
 
-            /* Visible on the serial terminal at 1 Hz to validate the link. */
-            if ((now - last_imu_log) >= 1000U) {
+            /* Visible on the serial terminal to validate the link. */
+            if ((now - last_imu_log) >= IMU_LOG_MS) {
                 last_imu_log = now;
-                ESP_LOGI(TAG, "[IMU] R=%.1f P=%.1f L=%d BLE=%s",
+                ESP_LOGI(TAG, "[IMU] R=%.1f P=%.1f L=%d H=%d M=%d BLE=%s",
                          roll_i / 10.0f, pitch_i / 10.0f, imu_level,
+                         imu_hold_i, imu_mov_i,
                          ble_uart_is_notifying() ? "on" : "off");
             }
         }
         else {
             ESP_LOGW(TAG, "[IMU] telemetria invalida: '%s'", msg);
         }
+    }
+    else if (strncmp(msg, "ESP:LIVE:", 9) == 0) {
+        ESP_LOGI(TAG, "[LIVE] %s", msg + 9);
+        if (strcmp(msg + 9, "ON") == 0)
+            ble_uart_send("[POD 042] LIVE ON\n");
+        else
+            ble_uart_send("[POD 042] LIVE OFF\n");
     }
 
     else
