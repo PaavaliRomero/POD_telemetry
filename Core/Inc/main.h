@@ -54,6 +54,8 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
+void POD_I2C2_Reinit(void);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

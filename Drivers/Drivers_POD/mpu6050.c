@@ -41,20 +41,27 @@ MPU6050_Status_t MPU6050_ConfigModifi(MPU6050_Handle_t *dev)
 	if(dev == NULL)
 		return MPU6050_ERROR;
 
-	/*Wake up + PLL*/
-	MPU6050_WriteReg(dev, 0x01, MPU6050_REG_PWR_MGMT1);
+	/* Se propaga el primer error: si el bus esta colgado o el MPU no
+	 * responde, no tiene sentido seguir escribiendo registros ni
+	 * devolver OK (antes se ignoraban todos los fallos). */
+	if (MPU6050_WriteReg(dev, 0x01, MPU6050_REG_PWR_MGMT1) != MPU6050_OK)
+		return MPU6050_ERROR;
 	/*Sample Rate = 1kHz*/
-	MPU6050_WriteReg(dev, 0x00, MPU6050_REG_SMPLRT_DIV);
+	if (MPU6050_WriteReg(dev, 0x00, MPU6050_REG_SMPLRT_DIV) != MPU6050_OK)
+		return MPU6050_ERROR;
 	/* DLPF = 21 Hz (accel) / 20 Hz (gyro).
 	 * El lazo muestrea a 20 Hz; 42 Hz dejaba pasar vibración que
 	 * luego aparecía como aliasing. Para más suavizado usar 0x05
 	 * (10 Hz); para más respuesta usar 0x03 (42 Hz). */
-	MPU6050_WriteReg(dev, 0x04, MPU6050_REG_CONFIG_DLPF);
+	if (MPU6050_WriteReg(dev, 0x04, MPU6050_REG_CONFIG_DLPF) != MPU6050_OK)
+		return MPU6050_ERROR;
 	/*Gyro +- 250 dps*/
-	MPU6050_WriteReg(dev, MPU6050_Gyro_FS_250, MPU6050_REG_GYRO_CONFIG);
+	if (MPU6050_WriteReg(dev, MPU6050_Gyro_FS_250, MPU6050_REG_GYRO_CONFIG) != MPU6050_OK)
+		return MPU6050_ERROR;
 	dev->gyro_config = 250;
 	/*Accel +-4g*/
-	MPU6050_WriteReg(dev, MPU6050_Accel_FS_4G, MPU6050_REG_ACCEL_CONFIG);
+	if (MPU6050_WriteReg(dev, MPU6050_Accel_FS_4G, MPU6050_REG_ACCEL_CONFIG) != MPU6050_OK)
+		return MPU6050_ERROR;
 	dev->accel_config = 4;
 
 	return MPU6050_OK;

@@ -86,6 +86,8 @@ UART1 at 115200 baud, 8N1.
 | `IMU:ON / IMU:OFF` | IMU activation state |  
 | `IMU:SHAKE` | Shake gesture detected |  
 | `IMU:Z%d,R%d,P%d` | Zone, roll x10, pitch x10 |  
+| `IMU:I2C:RECOVER` | Bus I2C liberado y MPU reconfigurado |  
+| `IMU:I2C:FAIL` | No se pudo recuperar el bus I2C |  
 | `STM:SLEEP` | Notifies ESP32 before entering sleep |  
 | `STM:WAKE` | Notifies ESP32 after waking up |  
    
@@ -113,8 +115,28 @@ Shake detection uses a **circular buffer of 8 samples** calculating
 acceleration magnitude variance. A shake is triggered when:  
 - Variance exceeds **0.35**  
 - Cooldown of **1000ms** has elapsed since last shake  
-   
----  
+  
+### I2C bus recovery
+
+If the MPU6050 does not answer for **5 consecutive samples** (~250 ms), the
+firmware assumes SDA may be stuck low and runs a real bus recovery instead of
+just rewriting sensor registers:
+
+1. `HAL_I2C_DeInit()` releases the peripheral and its pins.
+2. `PB10`/`PB11` become open-drain GPIO; up to **9 SCL pulses** let the slave
+   finish the interrupted transaction and release SDA.
+3. A manual **STOP** condition leaves the bus in a known state.
+4. `POD_I2C2_Reinit()` re-arms I2C2 with the CubeMX configuration.
+5. A short **device-ready probe** (~10 ms) checks the MPU before rewriting
+   its registers; if it is absent, the failure is reported immediately.
+6. The MPU configuration is reapplied and the gyro bias is recalibrated.
+
+A **1 s cooldown** avoids retrying against a bus that is physically dead.
+Results are reported as `IMU:I2C:RECOVER` or `IMU:I2C:FAIL`. Full rationale,
+limits and the hardware test procedure are in
+[`docs/I2C_RECOVERY.md`](docs/I2C_RECOVERY.md).
+
+---
    
 ## Battery Measurement  
    

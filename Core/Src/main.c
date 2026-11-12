@@ -513,6 +513,19 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+/**
+ * @brief Rearma I2C2 con la configuracion generada por CubeMX.
+ *
+ * La usa la recuperacion del bus en pod_imu.c: tras un bus clear hay que
+ * devolver PB10/PB11 a modo alterno open-drain y reactivar el periferico.
+ * Se deja en un bloque USER CODE para que CubeMX no la borre al regenerar,
+ * y MX_I2C2_Init sigue siendo la unica fuente de la configuracion.
+ */
+void POD_I2C2_Reinit(void)
+{
+  MX_I2C2_Init();
+}
+
 /* USER CODE END 4 */
 
 /**

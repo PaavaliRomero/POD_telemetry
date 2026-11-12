@@ -1,11 +1,13 @@
 #include "pod_imu.h"
 #include "pod_shared.h"
+#include "main.h"
 #include "stm32f1xx_hal.h"
 #include <math.h>
 #include <stdio.h>
 
 /* ── Periféricos externos de main.c ─────────────── */
 extern MPU6050_Handle_t mpu;
+extern I2C_HandleTypeDef hi2c2;
 
 /* ── IMU DEFINES ──────────────────────────── */
 #define IMU_SAMPLE_MS            50U      // 20 Hz
@@ -39,8 +41,17 @@ extern MPU6050_Handle_t mpu;
 #define LEVEL_ON_DEBOUNCE_MS     200U
 #define LEVEL_OFF_DEBOUNCE_MS    400U
 
-/* Tras varios fallos seguidos del bus I2C, reconfigurar el MPU. */
+/* Tras varios fallos seguidos del bus I2C, intentar recuperarlo. */
 #define IMU_I2C_FAIL_LIMIT       5U
+
+/* No reintentar la recuperacion mas de una vez por segundo: si el bus
+ * esta realmente muerto, martillear el periferico no ayuda. */
+#define IMU_I2C_RECOVER_COOLDOWN_MS 1000U
+
+/* Bus clear: hasta 9 pulsos de SCL para que el esclavo termine la
+ * transaccion que dejo a medias y libere SDA. */
+#define I2C_BUS_CLEAR_PULSES     9U
+#define I2C_BUS_CLEAR_HALF_US    5U
 
 #define ALPHA_MOVING             0.98f
 #define ALPHA_STILL              0.95f
@@ -77,6 +88,7 @@ static uint32_t level_on_tick      = 0;
 static uint32_t level_off_tick     = 0;
 
 static uint8_t  i2c_fail_count     = 0;
+static uint32_t last_i2c_recover_tick = 0;
 
 static uint32_t imu_last_tick      = 0;
 static uint32_t last_motion_tick   = 0;
@@ -284,6 +296,7 @@ static void IMU_ResetRuntime(void)
     level_off_tick     = HAL_GetTick();
 
     i2c_fail_count     = 0;
+    last_i2c_recover_tick = HAL_GetTick() - IMU_I2C_RECOVER_COOLDOWN_MS;
 
     imu_last_tick       = HAL_GetTick();
     last_motion_tick    = HAL_GetTick();
@@ -418,6 +431,127 @@ void IMU_DetectGesture(float ax, float ay, float az)
     }
 }
 
+/* ── Recuperacion del bus I2C2 ─────────────────────────────────────────
+ *
+ * Un esclavo interrumpido a mitad de transaccion puede dejar SDA en bajo
+ * y el periferico I2C del STM32 se queda esperando. Reconfigurar el MPU
+ * (lo que se hacia antes) no sirve: el problema esta en el bus, no en los
+ * registros del sensor. La secuencia correcta es:
+ *
+ *   1. Apagar I2C2 (HAL_I2C_DeInit) y soltar las lineas.
+ *   2. Tomar PB10/PB11 como GPIO open-drain y generar hasta 9 pulsos de
+ *      SCL. Cada pulso permite al esclavo sacar un bit; cuando termina la
+ *      transaccion suelta SDA.
+ *   3. Generar una condicion de STOP manual (SDA sube con SCL alto).
+ *   4. Rearmar I2C2 con la configuracion de CubeMX (POD_I2C2_Reinit).
+ *   5. Reaplicar la configuracion del MPU, que pudo reiniciarse.
+ *
+ * El retardo es un lazo aproximado: el bus clear solo necesita ~100 kHz,
+ * no un tiempo exacto. */
+
+static void I2C_BusClearDelayUs(uint32_t us)
+{
+    volatile uint32_t n = us * 14U;
+    while (n--)
+    {
+        __NOP();
+    }
+}
+
+static void I2C_BusClearPulse(void)
+{
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+}
+
+/**
+ * @brief Ejecuta la recuperacion fisica del bus I2C2.
+ * @return 1 si el bus quedo libre y el MPU respondio, 0 si no.
+ */
+static uint8_t IMU_I2C_Recover(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    /* 1. Apagar periferico, interrupciones y pines AF. */
+    (void)HAL_I2C_DeInit(&hi2c2);
+
+    /* 2. PB10/PB11 como salida open-drain. El clock de GPIOB sigue
+     *    encendido desde el MspInit, pero se asegura por claridad. */
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    gpio.Pin   = GPIO_PIN_10 | GPIO_PIN_11;
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* Soltar ambas lineas y comprobar su estado real. */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+
+    uint8_t scl_ok = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET);
+    uint8_t sda_ok = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET);
+
+    /* 3. Pulsos de SCL hasta que el esclavo libere SDA. */
+    for (uint8_t i = 0; i < I2C_BUS_CLEAR_PULSES && !sda_ok; i++)
+    {
+        I2C_BusClearPulse();
+        sda_ok = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET);
+    }
+
+    /* 4. STOP manual: SDA baja con SCL alto y luego sube. */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
+    I2C_BusClearDelayUs(I2C_BUS_CLEAR_HALF_US);
+
+    sda_ok = sda_ok && (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET);
+    scl_ok = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET);
+
+    /* 5. Devolver los pines al periferico aunque el bus siga mal: si no,
+     *    el I2C queda apagado y no hay ninguna otra via de salida. */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10 | GPIO_PIN_11);
+    POD_I2C2_Reinit();
+
+    if (!sda_ok || !scl_ok)
+        return 0U;
+
+    /* 6. Comprobar que el MPU responde antes de reescribir cinco registros
+     *    con timeout de 100 ms cada uno. Si el sensor no esta, conviene
+     *    fallar rapido (~10 ms) y no bloquear el lazo medio segundo. */
+    if (HAL_I2C_IsDeviceReady(&hi2c2, MPU6050_I2C_ADDR, 1, 10U) != HAL_OK)
+        return 0U;
+
+    if (MPU6050_ConfigModifi(&mpu) != MPU6050_OK)
+        return 0U;
+
+    bias_ready = 0;
+    bias_count = 0;
+    bias_sum_x = 0.0f;
+    bias_sum_y = 0.0f;
+    bias_sum_z = 0.0f;
+
+    return 1U;
+}
+
+static void IMU_I2C_HandleFailure(uint32_t now)
+{
+    if ((now - last_i2c_recover_tick) < IMU_I2C_RECOVER_COOLDOWN_MS)
+        return;
+
+    last_i2c_recover_tick = now;
+
+    if (IMU_I2C_Recover())
+        POD_UART_Send("IMU:I2C:RECOVER\r\n");
+    else
+        POD_UART_Send("IMU:I2C:FAIL\r\n");
+}
+
 void IMU_Processloop(void)
 {
     uint32_t now = HAL_GetTick();
@@ -459,10 +593,10 @@ void IMU_Processloop(void)
         {
             i2c_fail_count = 0;
 
-            /* El bus pudo quedar colgado o el MPU reiniciado por ruido
-             * en los cables. Reaplicar la configuración. */
-            MPU6050_ConfigModifi(&mpu);
-            POD_UART_Send("IMU:I2C:RECOVER\r\n");
+            /* El bus pudo quedar colgado a mitad de transaccion. No basta
+             * con reconfigurar el MPU: hay que liberar fisicamente SDA
+             * (bus clear) y rearmar I2C2. */
+            IMU_I2C_HandleFailure(now);
         }
 
         return;
