@@ -135,7 +135,8 @@ static void ble_rx_handler(const char *data, uint16_t len)
         body += 4;
 
     /* Only accept commands the STM32 knows; anything else puts it in ERROR. */
-    if (strcmp(body, "TARE") != 0 && strcmp(body, "HOLD") != 0 &&
+    if (strcmp(body, "TARE") != 0 && strcmp(body, "TARECLR") != 0 &&
+        strcmp(body, "HOLD") != 0 &&
         strcmp(body, "MPU")  != 0 && strcmp(body, "PING") != 0 &&
         strcmp(body, "BATT") != 0 && strcmp(body, "LED")  != 0 &&
         strcmp(body, "LIVE") != 0) {
@@ -156,7 +157,7 @@ static void ble_rx_handler(const char *data, uint16_t len)
     pod_send_cmd_STM32(out);
 
     char note[24];
-    snprintf(note, sizeof(note), "[POD 042] CMD %.4s\n", body);
+    snprintf(note, sizeof(note), "[POD 042] CMD %.8s\n", body);
     ble_uart_send(note);
 }
 
@@ -299,6 +300,14 @@ static void handle_rx(const char *msg)
             ble_uart_send("[POD 042] LIVE ON\n");
         else
             ble_uart_send("[POD 042] LIVE OFF\n");
+    }
+    else if (strcmp(msg, "ESP:TARE:CLEAR") == 0) {
+        ESP_LOGI(TAG, "[TARE] cero borrado");
+        ble_uart_send("[POD 042] TARE CLEAR\n");
+    }
+    else if (strcmp(msg, "ESP:TARE:ERR") == 0) {
+        ESP_LOGW(TAG, "[TARE] no se pudo borrar el cero");
+        ble_uart_send("[POD 042] TARE ERR\n");
     }
 
     else
