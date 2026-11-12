@@ -23,6 +23,19 @@ extern void SystemClock_Config(void);
 #define ADC_READ_SAMPLES 16U //samples measures
 #define ADC_CONVERSION_TIMEOUT_MS 2U
 
+/* ── Calibracion del divisor de bateria ───────────────────────────
+ * Circuito: Vbatt -> PNP (conmutacion) -> R1 -> PB1 (ADC) -> R2 -> GND.
+ *   Vpin  = (Vbatt - Vce) * R2 / (R1 + R2)
+ *   Vbatt = Vpin * (R1 + R2) / R2 + Vce
+ *
+ * BATT_GAIN_MILLI = (R1 + R2) / R2 * 1000. Con R1 = R2 vale 2000 (x2).
+ * BATT_DROP_MV    = Vce del PNP, ~200 mV medidos con bateria de 4.1 V.
+ *
+ * Si se cambian las resistencias (tolerancia +/-10 % en el montaje actual)
+ * o se migra a MOSFET, ajustar BATT_GAIN_MILLI y BATT_DROP_MV. */
+#define BATT_GAIN_MILLI  2000U
+#define BATT_DROP_MV      200U
+
 static void BATT_EN_On(void)
 {
 #if BATT_EN_ACTIVE_HIGH
