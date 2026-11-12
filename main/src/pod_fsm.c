@@ -294,6 +294,20 @@ static void handle_rx(const char *msg)
             ESP_LOGW(TAG, "[IMU] telemetria invalida: '%s'", msg);
         }
     }
+    /*
+     * I2C bus recovery report from STM32. It fires when the sensor did
+     * not answer for several consecutive samples.
+     *   "IMU:I2C:RECOVER" -> bus cleared and MPU reconfigured
+     *   "IMU:I2C:FAIL"    -> SDA/SCL still stuck or MPU did not answer
+     */
+    else if (strcmp(msg, "IMU:I2C:RECOVER") == 0) {
+        ESP_LOGW(TAG, "[I2C] bus recuperado");
+        ble_uart_send("[POD 042] I2C RECOVER\n");
+    }
+    else if (strcmp(msg, "IMU:I2C:FAIL") == 0) {
+        ESP_LOGE(TAG, "[I2C] no se pudo recuperar el bus");
+        ble_uart_send("[POD 042] I2C FAIL\n");
+    }
     else if (strncmp(msg, "ESP:LIVE:", 9) == 0) {
         ESP_LOGI(TAG, "[LIVE] %s", msg + 9);
         if (strcmp(msg + 9, "ON") == 0)
