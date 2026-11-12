@@ -275,7 +275,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   POD_UART_StartRx(&huart1);
+#if POD_USE_OLED
   ssd1306_Init();
+#endif
   MPU6050_Init(&mpu, &hi2c2, MPU6050_I2C_ADDR);
 
   /* USER CODE END 2 */
@@ -293,8 +295,10 @@ int main(void)
 
 	  /* MAIN STATE MACHINE FOR LOGIC*/
 	  FINITE_STATE_MACHINE_MAIN();
+#if POD_USE_OLED
 	  /* MAIN UI FSM for image in screen*/
 	  POD_UI_TASK();
+#endif
 	  /*IMU commands for gestures*/
 	  IMU_Processloop();
   }

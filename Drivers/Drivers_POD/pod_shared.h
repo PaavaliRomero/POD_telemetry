@@ -9,6 +9,25 @@
 #define POD_CMD_BUF_SIZE 64U
 
 /**
+ * @brief Compilar y ejecutar la interfaz OLED.
+ *
+ * 0 = sin pantalla (por defecto): no se inicializa la OLED ni se refresca.
+ *     El codigo de ui_oled.c y ssd1306.c se sigue compilando para detectar
+ *     roturas, pero el linker lo descarta porque nadie lo referencia.
+ * 1 = con pantalla: se inicializa, se dibuja la pantalla de nivel y se
+ *     apaga/enciende junto con el modo sleep.
+ *
+ * Motivacion: la OLED comparte I2C2 con el MPU6050 y ssd1306.c usa
+ * HAL_MAX_DELAY en todas sus escrituras. Un panel ausente o colgado puede
+ * bloquear el bus del sensor, y cada refresco mueve ~0.5 KB por I2C
+ * (~12 ms a 400 kHz) cada 100 ms mientras el IMU esta activo.
+ * Ver docs/OLED_BUILD.md para el analisis completo.
+ */
+#ifndef POD_USE_OLED
+#define POD_USE_OLED 0
+#endif
+
+/**
  * @brief Estados de la máquina de estados principal del POD.
  */
 typedef enum {

@@ -229,14 +229,18 @@ void POD_FSM_MPU_Toggle_func(void)
 void POD_ModeSleep_Func(void)
 {
     BATT_EN_Off();
+#if POD_USE_OLED
     ssd1306_SetDisplayOn(0);
+#endif
     POD_UART_Send("STM:SLEEP\n");
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
     // CPU pausa aquí hasta que presiones el botón
     SystemClock_Config();
     POD_UART_Resume();
     MPU6050_ConfigModifi(&mpu);
+#if POD_USE_OLED
     ssd1306_SetDisplayOn(1);
+#endif
     last_activity_tick = HAL_GetTick();
     POD_UART_Send("STM:WAKE\n");
 }
@@ -268,14 +272,18 @@ void FINITE_STATE_MACHINE_MAIN(void)
 				uint8_t user_activity = 0;
 
 				if		(strcmp(cmd, "STM:LED")==0) {
+#if POD_USE_OLED
 					Clear_Screen_ssd1306();
+#endif
 					POD_FSM_LED_func();
 					user_activity = 1;
 				}
 				else if	(strcmp(cmd,"STM:PING")==0)		POD_FSM_PING_func();
 				else if	(strcmp(cmd, "STM:BATT")==0)		POD_FSM_BATT_func();
 				else if	(strcmp(cmd, "STM:MPU")==0) {
+#if POD_USE_OLED
 					Clear_Screen_ssd1306();
+#endif
 					POD_FSM_MPU_Toggle_func();
 					user_activity = 1;
 				}
@@ -333,11 +341,12 @@ void POD_UI_TASK(void)
 	 * FSM for print on the screen diferents states
 	 *
 	 * */
+#if POD_USE_OLED
 	switch(pod_state_ui)
 	{
 		case POD_STATE_AnimaLoad: POD_UI_AnimaLoad_Task(); break;
 		case POD_STATE_MainScreen: POD_UI_MainScreen(); break;
 		case POD_STATE_FaultScreen: POD_UI_FAULTSCREEN(); break;
 	}
-
+#endif
 }

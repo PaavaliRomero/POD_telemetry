@@ -12,7 +12,7 @@ and UART communication with the ESP32.
 |-----------|-------------|  
 | STM32F103 | Peripheral control microcontroller |  
 | MPU6050 | Orientation sensor — roll, pitch and gesture detection |  
-| OLED SSD1306 128x32 | System HUD display |  
+| OLED SSD1306 128x32 | Optional HUD display (disabled by default, see below) |  
 | LiPo Battery | Power source with ADC voltage measurement |  
 | ESP32 (see esp32 branch) | Central processing unit |  
    
@@ -58,7 +58,7 @@ Wake up is triggered by a physical button press on **PA3** via EXTI interrupt.
 On wake up the system:  
 1. Restores system clock  
 2. Reconfigures MPU6050  
-3. Reactivates OLED display  
+3. Reactivates OLED display (only if `POD_USE_OLED = 1`)  
 4. Notifies ESP32 with `STM:WAKE`  
    
 ---  
@@ -126,14 +126,34 @@ of the STM32 ADC for accurate VDD compensation.
 ---  
    
 ## OLED Interface  
-   
+
 | Screen | Trigger |  
 |--------|---------|  
 | Loading animation | System startup |  
 | Main screen | Normal operation |  
 | Fault screen | Error state |  
-   
----  
+
+### OLED build flag (`POD_USE_OLED`)
+
+The SSD1306 panel is **optional at build time**. `POD_USE_OLED` in
+`Drivers/Drivers_POD/pod_shared.h` defaults to **0** (no display):
+
+| Value | Behavior |
+|---|---|
+| `0` | OLED is not initialized or refreshed. The code is still compiled, but the linker drops it. |
+| `1` | OLED is initialized, the level screen is drawn, and the panel is turned off/on with sleep. |
+
+Why: the panel shares **I2C2 with the MPU6050**, and `ssd1306.c` waits with
+`HAL_MAX_DELAY`. A dead or stuck panel can therefore block the sensor bus.
+Each refresh also moves ~0.5 KB over I2C (~12 ms at 400 kHz) every 100 ms
+while the IMU is active. Measured cost when enabled: **+11 680 B flash and
++536 B RAM**.
+
+This is not proven to be the cause of the ~5 Hz telemetry: measure before and
+after. Full rationale, trade-offs and the measurement procedure are in
+[`docs/OLED_BUILD.md`](docs/OLED_BUILD.md).
+
+---
    
 ## Build  
    
