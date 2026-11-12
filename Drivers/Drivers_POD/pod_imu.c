@@ -91,6 +91,21 @@ static float    shake_buf[SHAKE_WINDOW];
 static uint8_t  shake_idx     = 0;
 static uint32_t shake_last    = 0;
 
+/* ── Envoltura angular ─────────────────────────────────────────────────
+ * El giroscopio integra sin limite y atan2f solo devuelve (-180, 180].
+ * Si la innovacion se calcula como (acc - fused) sin envolver, cerca de
+ * +-180 aparece una diferencia de ~360 grados: el filtro se queda pegado
+ * en 183.7 en vez de pasar a -176.3. Se envuelve el camino angular corto
+ * antes de mezclar, no solo la salida. */
+static float IMU_Wrap180(float deg)
+{
+    while (deg > 180.0f)
+        deg -= 360.0f;
+    while (deg < -180.0f)
+        deg += 360.0f;
+    return deg;
+}
+
 /* ── Persistencia del cero (TARE) en la ultima pagina de flash ─────────
  * El STM32F103 no tiene EEPROM. Se reserva la ultima pagina de 1 KB
  * (ver STM32F103C8TX_FLASH.ld, LENGTH = 63K) y solo se reescribe cuando
@@ -149,7 +164,7 @@ static uint8_t NVM_LoadTare(void)
     if (!NVM_TareValid(rec->roll) || !NVM_TareValid(rec->pitch))
         return 0;
 
-    tare_roll  = rec->roll;
+    tare_roll  = IMU_Wrap180(rec->roll);
     tare_pitch = rec->pitch;
     return 1;
 }
@@ -279,8 +294,9 @@ static void IMU_ResetRuntime(void)
 
 void IMU_Tare(void)
 {
-    /* El ángulo absoluto es fused + tare. Al tarar, movemos el cero. */
-    tare_roll  += fused_roll;
+    /* El ángulo absoluto es fused + tare. Al tarar, movemos el cero y lo
+     * guardamos envuelto en (-180, 180] para no acumular vueltas. */
+    tare_roll  = IMU_Wrap180(tare_roll  + fused_roll);
     tare_pitch += fused_pitch;
 
     fused_roll  = 0.0f;
@@ -310,7 +326,7 @@ uint8_t IMU_TareClear(void)
 {
     /* Convertir el cero relativo a absoluto antes de borrar la referencia:
      * la lectura no salta, simplemente deja de restar el offset. */
-    fused_roll  += tare_roll;
+    fused_roll  = IMU_Wrap180(fused_roll + tare_roll);
     fused_pitch += tare_pitch;
 
     tare_roll  = 0.0f;
@@ -511,7 +527,7 @@ void IMU_Processloop(void)
     float gy =  gz_s;
     float gz = -gx_s;
 
-    float roll_acc  = atan2f(ay, az) * 180.0f / (float)M_PI - tare_roll;
+    float roll_acc  = IMU_Wrap180(atan2f(ay, az) * 180.0f / (float)M_PI - tare_roll);
     float pitch_acc = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / (float)M_PI - tare_pitch;
 
     float accel_mag = accel_mag_s;
@@ -587,11 +603,16 @@ void IMU_Processloop(void)
 
     IMU_Moving = moving;
 
-    /* ── Filtro complementario adaptativo ─────────── */
+    /* ── Filtro complementario adaptativo ───────────
+     * Se envuelve la prediccion y la innovacion por separado: la mezcla
+     * debe usar el camino angular corto. La salida tambien queda en
+     * (-180, 180], que es lo que se publica y se dibuja. */
     float alpha = moving ? ALPHA_MOVING : ALPHA_STILL;
 
-    fused_roll  = alpha * (fused_roll  + GYRO_ROLL_SIGN  * gx * dt)
-                + (1.0f - alpha) * roll_acc;
+    float pred_roll = IMU_Wrap180(fused_roll + GYRO_ROLL_SIGN * gx * dt);
+
+    fused_roll  = IMU_Wrap180(pred_roll +
+                              (1.0f - alpha) * IMU_Wrap180(roll_acc - pred_roll));
     fused_pitch = alpha * (fused_pitch + GYRO_PITCH_SIGN * gy * dt)
                 + (1.0f - alpha) * pitch_acc;
 
