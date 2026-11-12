@@ -49,8 +49,20 @@ void IMU_DetectGesture(float ax, float ay, float az);
 /**
  * @brief Fija la inclinación actual como referencia cero.
  * @note  Reinicia el hold y la referencia de movimiento.
+ * @note  El cero se persiste en flash y se recupera al reactivar el IMU.
  */
 void IMU_Tare(void);
+
+/**
+ * @brief Borra el cero guardado y vuelve al angulo absoluto del sensor.
+ *
+ * Convierte el valor relativo actual a absoluto y despues borra la pagina
+ * de flash, de modo que no hay salto en la lectura. Es idempotente: si no
+ * habia nada guardado, responde igual y no cambia el comportamiento.
+ *
+ * @return 1 si la pagina quedo borrada, 0 si fallo la escritura en flash.
+ */
+uint8_t IMU_TareClear(void);
 
 /**
  * @brief Alterna el hold manual de la lectura.

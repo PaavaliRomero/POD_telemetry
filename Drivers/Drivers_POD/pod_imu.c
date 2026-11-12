@@ -91,6 +91,143 @@ static float    shake_buf[SHAKE_WINDOW];
 static uint8_t  shake_idx     = 0;
 static uint32_t shake_last    = 0;
 
+/* ── Persistencia del cero (TARE) en la ultima pagina de flash ─────────
+ * El STM32F103 no tiene EEPROM. Se reserva la ultima pagina de 1 KB
+ * (ver STM32F103C8TX_FLASH.ld, LENGTH = 63K) y solo se reescribe cuando
+ * el usuario tara o borra el cero. Un corte a mitad de escritura deja
+ * el CRC invalido y el arranque cae a tare = 0, sin estado corrupto. */
+#define NVM_TARE_ADDR      0x0800FC00UL
+#define NVM_TARE_MAGIC     0x54415245UL  /* "TARE" */
+#define NVM_TARE_VERSION   1U
+#define NVM_TARE_MAX_DEG   360.0f
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    float    roll;
+    float    pitch;
+    uint32_t crc;      /* CRC32 de los 16 bytes anteriores */
+} NVM_TareRecord;
+
+static uint32_t NVM_Crc32(const uint8_t *data, uint32_t len)
+{
+    uint32_t crc = 0xFFFFFFFFUL;
+
+    for (uint32_t i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for (uint8_t bit = 0; bit < 8U; bit++)
+        {
+            if (crc & 1U)
+                crc = (crc >> 1) ^ 0xEDB88320UL;
+            else
+                crc >>= 1;
+        }
+    }
+
+    return ~crc;
+}
+
+static uint8_t NVM_TareValid(float deg)
+{
+    /* Descarta NaN, infinito y valores absurdos. */
+    return (deg == deg) && (fabsf(deg) <= NVM_TARE_MAX_DEG);
+}
+
+/* Lee el cero guardado. Devuelve 1 si habia un registro valido. */
+static uint8_t NVM_LoadTare(void)
+{
+    const NVM_TareRecord *rec = (const NVM_TareRecord *)NVM_TARE_ADDR;
+
+    if (rec->magic != NVM_TARE_MAGIC || rec->version != NVM_TARE_VERSION)
+        return 0;
+
+    if (NVM_Crc32((const uint8_t *)rec, sizeof(*rec) - sizeof(uint32_t)) != rec->crc)
+        return 0;
+
+    if (!NVM_TareValid(rec->roll) || !NVM_TareValid(rec->pitch))
+        return 0;
+
+    tare_roll  = rec->roll;
+    tare_pitch = rec->pitch;
+    return 1;
+}
+
+static uint8_t NVM_EraseTarePage(void)
+{
+    FLASH_EraseInitTypeDef erase = {0};
+    uint32_t page_error = 0;
+    HAL_StatusTypeDef status;
+
+    erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+    erase.PageAddress = NVM_TARE_ADDR;
+    erase.NbPages     = 1;
+
+    if (HAL_FLASH_Unlock() != HAL_OK)
+        return 0;
+
+    status = HAL_FLASHEx_Erase(&erase, &page_error);
+
+    (void)HAL_FLASH_Lock();
+
+    return (status == HAL_OK) ? 1U : 0U;
+}
+
+/* Reescribe la pagina con el cero actual. Solo se llama al tarar. */
+static uint8_t NVM_SaveTare(void)
+{
+    NVM_TareRecord rec;
+    uint32_t addr = NVM_TARE_ADDR;
+    uint8_t ok = 1;
+
+    rec.magic    = NVM_TARE_MAGIC;
+    rec.version  = NVM_TARE_VERSION;
+    rec.reserved = 0xFFFFU;
+    rec.roll     = tare_roll;
+    rec.pitch    = tare_pitch;
+    rec.crc      = NVM_Crc32((const uint8_t *)&rec, sizeof(rec) - sizeof(uint32_t));
+
+    if (!NVM_EraseTarePage())
+        return 0;
+
+    if (HAL_FLASH_Unlock() != HAL_OK)
+        return 0;
+
+    for (uint32_t i = 0; i < (sizeof(rec) / sizeof(uint32_t)); i++)
+    {
+        uint32_t word = ((const uint32_t *)&rec)[i];
+
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word) != HAL_OK)
+        {
+            ok = 0;
+            break;
+        }
+
+        addr += 4U;
+    }
+
+    (void)HAL_FLASH_Lock();
+
+    /* Verificar que se escribio lo esperado. */
+    if (ok)
+    {
+        const uint32_t *flash = (const uint32_t *)NVM_TARE_ADDR;
+        const uint32_t *ram   = (const uint32_t *)&rec;
+
+        for (uint32_t i = 0; i < (sizeof(rec) / sizeof(uint32_t)); i++)
+        {
+            if (flash[i] != ram[i])
+            {
+                ok = 0;
+                break;
+            }
+        }
+    }
+
+    return ok;
+}
+
 static void IMU_ClearOutputs(void)
 {
     IMU_Roll   = 0.0f;
@@ -106,6 +243,9 @@ static void IMU_ResetRuntime(void)
     fused_pitch      = 0.0f;
     tare_roll        = 0.0f;
     tare_pitch       = 0.0f;
+
+    /* Recuperar el cero de la ultima sesion (si el registro es valido). */
+    (void)NVM_LoadTare();
 
     gyro_bias_x      = 0.0f;
     gyro_bias_y      = 0.0f;
@@ -161,6 +301,32 @@ void IMU_Tare(void)
 
     last_motion_tick    = HAL_GetTick();
     last_telemetry_tick = 0;
+
+    /* Persistir el nuevo cero; si falla, el tarado sigue valido en RAM. */
+    (void)NVM_SaveTare();
+}
+
+uint8_t IMU_TareClear(void)
+{
+    /* Convertir el cero relativo a absoluto antes de borrar la referencia:
+     * la lectura no salta, simplemente deja de restar el offset. */
+    fused_roll  += tare_roll;
+    fused_pitch += tare_pitch;
+
+    tare_roll  = 0.0f;
+    tare_pitch = 0.0f;
+
+    hold_manual      = 0;
+    hold_auto        = 0;
+    auto_hold_armed  = 0;
+    level_state      = 0;
+
+    level_on_pending  = 0;
+    level_off_pending = 0;
+
+    last_telemetry_tick = 0;
+
+    return NVM_EraseTarePage();
 }
 
 void IMU_HoldToggle(void)

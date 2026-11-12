@@ -45,7 +45,10 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 20K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 64K
+  /* La ultima pagina (1 KB) se reserva para el cero de TARE persistido
+   * en flash: ver NVM_TARE_ADDR en pod_imu.c. No dejar que el codigo
+   * crezca sobre 0x0800FC00. */
+  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 63K
 }
 
 /* Sections */

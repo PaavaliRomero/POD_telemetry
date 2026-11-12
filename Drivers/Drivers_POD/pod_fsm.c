@@ -168,7 +168,7 @@ void POD_FSM_BATT_func(void)
 		POD_UART_Send(raw_msg);
 
 	uint32_t vpin_mv = ((uint32_t)adc_vbatt * vdd_mv) / PRESCALER_ADC_CAL;
-	VBATT = (uint16_t)(vpin_mv * 2U);
+	VBATT = (uint16_t)((vpin_mv * BATT_GAIN_MILLI) / 1000U + BATT_DROP_MV);
 
 	POD_UART_Send("ESP:ADC:BATT\n");
 
@@ -282,6 +282,11 @@ void FINITE_STATE_MACHINE_MAIN(void)
 				else if	(strcmp(cmd, "STM:TARE")==0) {
 					if (imu_active)
 						IMU_Tare();
+					user_activity = 1;
+				}
+				else if	(strcmp(cmd, "STM:TARECLR")==0) {
+					/* Borra el cero persistido y vuelve al angulo absoluto. */
+					POD_UART_Send(IMU_TareClear() ? "ESP:TARE:CLEAR\n" : "ESP:TARE:ERR\n");
 					user_activity = 1;
 				}
 				else if	(strcmp(cmd, "STM:HOLD")==0) {
