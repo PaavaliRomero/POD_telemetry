@@ -314,7 +314,6 @@ not part of the repository.
 - **Single I2C bus.** The MPU and the optional OLED share I2C2.
 - **Flash wear.** The TARE page is written only when the zero changes; the
   endurance is about 10 000 cycles per page.
-- **No license file** is included yet.
 
 ---
 
@@ -325,6 +324,12 @@ prepared with the help of an AI coding agent (OpenCode). The design decisions,
 hardware assembly, flashing and physical validation were performed by the
 author. AI-assisted changes were reviewed and compiled; their hardware status
 is stated explicitly in [Validation status](#validation-status).
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ---
 
