@@ -107,7 +107,13 @@ idf.py flash monitor
 ![menuconfig BLE configuration](assets/CMD_CONFIG_BLE.png)  
 ![menuconfig BLE configuration](assets/CMD_CONFIG_BLE2.png)  
    
----  
-   
-> ⚠️ Work in progress — active development.  
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+---
+
+> ⚠️ Work in progress — active development.
    
