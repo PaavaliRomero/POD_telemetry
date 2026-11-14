@@ -1,112 +1,414 @@
-# POD-042 — ESP32 Firmware  
-   
-Central processing unit of the POD-042 system, implemented on an ESP32 DevKit V1.  
-Responsible for BLE telemetry, STM32 communication, and system state management.  
-   
-   
-## Hardware Requirements  
-   
-| Component | Description |  
-|-----------|-------------|  
-| ESP32 DevKit V1 | Main microcontroller |  
-| STM32 (see stm32 branch) | Peripheral control unit |  
-   
-### Pin Configuration  
-   
-| Pin | Function |  
-|-----|----------|  
-| GPIO 16 | UART RX — receives data from STM32 |  
-| GPIO 17 | UART TX — sends commands to STM32 |  
-| GPIO 4  | Physical button — IMU toggle / wake signal |  
-   
----  
-   
-## Dependencies  
-   
-- **ESP-IDF v5.5.1** — Espressif IoT Development Framework  
-- **esp_hid** — HID/GATT BLE component (included in ESP-IDF)  
-- **nvs_flash** — Non-volatile storage for BLE bonding  
-   
----  
-   
-## FSM States  
-   
-| State | Description |  
-|-------|-------------|  
-| `ESP_STATE_INIT` | System initialization, first ping to STM32 |  
-| `ESP_STATE_IDLE` | Heartbeat every 3s, battery request every 30s |  
-| `ESP_STATE_IMU_ACTIVE` | IMU data processing, BLE telemetry transmission |  
-| `ESP_STATE_ERROR` | Communication fault, retry logic |  
-   
----  
-   
-## STM32 Communication Protocol  
-   
-UART2 at 115200 baud, 8N1.  
-   
-### Commands sent to STM32  
-   
-| Command | Description |  
-|---------|-------------|  
-| `STM:PING\n` | Heartbeat request |  
-| `STM:BATT\n` | Battery level request |  
-| `STM:LED\n` | LED toggle request |  
-| `STM:MPU\n` | IMU enable/disable toggle |  
-   
-### Messages received from STM32  
-   
-| Message | Description |  
-|---------|-------------|  
-| `ESP:PING:RECEIVE` | Heartbeat acknowledge |  
-| `ESP:LED:ON/OFF` | LED state confirmation |  
-| `ESP:ADC:BATT` | Battery measurement response |  
-| `IMU:ON / IMU:OFF` | IMU activation state |  
-| `IMU:SHAKE` | Shake gesture detected |  
-| `IMU:Z%d,R%d,P%d` | Zone, roll x10, pitch x10 |  
-   
----  
-   
-## BLE Telemetry  
-   
-Device name: **POD-9S**    
-Profile: GATT NUS (Nordic UART Service)    
-Compatible app: **Serial Bluetooth Terminal** (Android)  
-   
-### Custom profile configuration  
-   
-| Field | UUID |  
-|-------|------|  
-| Service UUID | `FFF0` |  
-| Read characteristic | `FFF1` |  
-| Write characteristic | `FFF2` |  
-   
-### Telemetry messages  
-   
-![menuconfig BLE configuration](assets/CMD_EXAMPLE_CONECTION.png)  
-![menuconfig BLE configuration](assets/CMD_EXAMPLE_SHOW.png)  
-   
----  
-   
-## Build and Flash  
-   
-```bash  
-# Set up ESP-IDF environment  
-. $HOME/esp/esp-idf/export.sh  
-   
-# Build  
-idf.py build  
-   
-# Flash and monitor  
-idf.py flash monitor  
-```  
-   
----  
-   
-## menuconfig Requirements  
-   
-![menuconfig BLE configuration](assets/CMD_CONFIG_BLE.png)  
-![menuconfig BLE configuration](assets/CMD_CONFIG_BLE2.png)  
-   
+# POD-042 — ESP32 Firmware
+
+Firmware for the central unit of POD-042: a battery-powered wireless digital
+level built around an **ESP32**, an **STM32F103** and an **MPU6050**. The ESP32
+does not read the sensor directly. It is the **BLE bridge**: it talks to the
+STM32 over UART, publishes roll/pitch telemetry to a phone, and forwards the
+commands written from the phone back to the STM32.
+
+The device reports **roll and pitch only** (no yaw, no magnetometer). See the
+`stm32` branch of this repository for the sensor firmware and for the validation
+status of the angle measurements.
+
+> **Prototype.** This is not a finished product. Some paths are built but still
+> pending hardware validation, and the OLED of the prototype does not work. See
+> [Validation status](#validation-status).
+
+---
+
+## Configure before building (`idf.py menuconfig`)
+
+**This firmware is not plug-and-play.** The Bluetooth stack in particular must
+match the code, because the implementation uses **Bluedroid**, not NimBLE, and a
+wrong option compiles but fails at runtime.
+
+The repository ships a working `sdkconfig`, but you must confirm it on your
+machine and on your board:
+
+```bash
+idf.py set-target esp32
+idf.py menuconfig
+```
+
+| Menu | Option | Value |
+|---|---|---|
+| Target | `idf.py set-target esp32` | `esp32` |
+| Component config → Bluetooth | Bluetooth | **Enabled** |
+| Bluetooth → Host | Bluedroid | **Enabled** |
+| Bluetooth → Bluedroid → GATT | GATTS | **Enabled** |
+| Bluetooth → Bluedroid → BLE 4.2 features | Supported | **Enabled** |
+| Bluetooth → Bluedroid → BLE 5.0 features | Supported | Disabled |
+| Bluetooth → Controller | Classic Bluetooth | Disabled |
+| Serial flasher config | Flash size | **2 MB** (adjust to your module) |
+| Partition table | Single factory app, no OTA | **Enabled** |
+| Component config → Log | Default log level | **Info** |
+| Component config → FreeRTOS | Tick rate | **100 Hz** |
+
+Notes:
+
+- **Do not select NimBLE.** `ble_uart.c` registers GAP/GATTS callbacks from the
+  Bluedroid API; the build succeeds with NimBLE but BLE never starts.
+- The code calls `esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT)` at
+  startup, so Classic Bluetooth must remain disabled.
+- The current `sdkconfig` uses **Debug (`-Og`)** optimization. For a final build,
+  select `Compiler optimization → Release (-Os)`.
+- The current partition table gives the application **1 MB** (single app, no
+  OTA). A build that outgrows it needs a new partition layout.
+
+Reference screenshots of the required options are in
+[`assets/`](assets/): `CMD_CONFIG_BLE.png` and `CMD_CONFIG_BLE2.png`.
+
+---
+
+## Hardware
+
+| Component | Role |
+|---|---|
+| ESP32 DevKit V1 | Central unit, BLE bridge |
+| STM32F103 (see `stm32` branch) | Sensor acquisition and orientation filter |
+| MPU6050 | Accelerometer + gyroscope, read by the STM32 |
+| Push button | Local control without the phone |
+
+### Pin configuration
+
+| Pin | Function |
+|---|---|
+| GPIO16 | UART2 RX ← STM32 PA9 (TX) |
+| GPIO17 | UART2 TX → STM32 PA10 (RX) |
+| GPIO4 | Push button, active low, internal pull-up |
+
+UART2 runs at **115200 8N1**. The board has no display; all local feedback is the
+LED and the button handled by the STM32, plus the serial terminal.
+
+---
+
+## Repository layout
+
+```text
+PODPryct/
+├── CMakeLists.txt
+├── README.md
+├── LICENSE
+├── .gitignore
+├── sdkconfig                  # Tracked working configuration
+├── sdkconfig.defaults
+├── sdkconfig.defaults.esp32
+├── dependencies.lock
+├── assets/                    # Menuconfig and BLE app screenshots
+│   ├── CMD_CONFIG_BLE.png
+│   ├── CMD_CONFIG_BLE2.png
+│   ├── CMD_EXAMPLE_CONECTION.png
+│   └── CMD_EXAMPLE_SHOW.png
+└── main/
+    ├── CMakeLists.txt
+    ├── Kconfig.projbuild
+    ├── idf_component.yml
+    ├── pod_main.c             # app_main: init + loop
+    ├── inc/
+    │   ├── ble_uart.h
+    │   ├── GPS_IDF.h
+    │   ├── modulo.h
+    │   ├── pod_fsm.h
+    │   └── UART_module.h
+    └── src/
+        ├── ble_uart.c         # Bluedroid GAP/GATTS, NUS profile
+        ├── GPS_IDF.c          # Legacy GPS parser (not used)
+        ├── modulo.c           # Legacy servo PWM (not used)
+        ├── pod_fsm.c          # Parsing, commands, button, telemetry
+        └── UART_module.c      # UART2 to the STM32
+
+build/                  # Generated by idf.py; git-ignored
+managed_components/     # Generated from idf_component.yml; git-ignored
+```
+
+`GPS_IDF.c` and `modulo.c` are legacy modules from earlier experiments. They are
+compiled but **not called** by the current firmware. The `IMU_Zone` enum in
+`pod_fsm.h` is also legacy and unused. The `led_strip` dependency is declared but
+the level firmware does not drive an addressable LED.
+
+---
+
+## Firmware architecture
+
+`app_main()` initialises UART, GPIO and the FSM, then runs a 10 ms loop:
+
+```c
+while (1) {
+    pod_fsm_run();                  /* read UART, button, timers, BLE */
+    vTaskDelay(pdMS_TO_TICKS(10));
+}
+```
+
+Every iteration `pod_fsm_run()`:
+
+1. Reads one line from the STM32 (10 ms timeout) and dispatches it.
+2. Updates the button state machine (short / long / double click).
+3. Sends `STM:PING` every **5 s** while the STM32 is awake.
+4. Sends `STM:BATT` at boot and every **30 s**.
+5. Publishes `IMU R… P… L…` to BLE at **2 Hz** while telemetry is fresh.
+6. Runs the FSM state (`INIT`, `IDLE`, `IMU_ACTIVE`, `ERROR`).
+
+### FSM states
+
+| State | Behaviour |
+|---|---|
+| `ESP_STATE_INIT` | Sends the first `STM:PING`, then goes to `IDLE` |
+| `ESP_STATE_IDLE` | Heartbeat, battery requests, button and BLE RX |
+| `ESP_STATE_IMU_ACTIVE` | Parses telemetry and publishes it to BLE |
+| `ESP_STATE_ERROR` | Fault path with a 1 s retry; defined but **not entered** by the current code |
+
+### UART protocol with the STM32
+
+Line-based ASCII at 115200 8N1, terminated by `\n`.
+
+**Commands sent by the ESP32:**
+
+| Command | When |
+|---|---|
+| `STM:PING` | At boot and every 5 s |
+| `STM:BATT` | At boot and every 30 s |
+| `STM:TARE` | Short button click, or `TARE` over BLE |
+| `STM:TARECLR` | `TARECLR` over BLE only |
+| `STM:HOLD` | Long button press, or `HOLD` over BLE |
+| `STM:MPU` | Double click, or `MPU` over BLE |
+| `STM:LIVE` | `LIVE` over BLE |
+| `STM:LED` | `LED` over BLE |
+
+**Messages received from the STM32:**
+
+| Message | Meaning |
+|---|---|
+| `ESP:PING:RECEIVE` | STM32 alive |
+| `STM:SLEEP` / `STM:WAKE` | STM32 enters/leaves STOP mode |
+| `ESP:LED:ON` / `ESP:LED:OFF` | LED state |
+| `ESP:ADC:BATT` | Battery measurement marker |
+| `ESP:ADC:BATT:<mV>` | Battery voltage |
+| `ESP:ADC:BATT:ERR` | Battery or VREFINT failure |
+| `ESP:ADC:RAW:vref=…,vbatt=…,vdd=…` | Raw ADC values for calibration |
+| `IMU:ON` / `IMU:OFF` | IMU activation state |
+| `IMU:L<0\|1>,R<deg×10>,P<deg×10>,H<0\|1>,M<0\|1>` | Level telemetry |
+| `IMU:I2C:RECOVER` / `IMU:I2C:FAIL` | I2C bus recovery result |
+| `ESP:TARE:CLEAR` / `ESP:TARE:ERR` | Tare-clear result |
+| `ESP:LIVE:ON` / `ESP:LIVE:OFF` | Live-mode state |
+
+The `H` (hold) and `M` (motion) fields are optional: an older STM32 firmware
+sends only `L,R,P`, and the parser still accepts it.
+
+### Button
+
+| Gesture | Command | Notes |
+|---|---|---|
+| Short click | `STM:TARE` | Fires after the 500 ms double-click window expires |
+| Long press ≥800 ms | `STM:HOLD` | Fires once, before release |
+| Double click ≤500 ms | `STM:MPU` | Toggles the IMU |
+
+Debounce is 30 ms. If the STM32 is sleeping, commands are discarded and the
+terminal shows `[CMD] STM32 dormido, se descarta: …`.
+
+### BLE profile
+
+| Field | UUID | Direction |
+|---|---|---|
+| Service | `0xFFF0` | — |
+| TX characteristic | `0xFFF1` | ESP32 → phone, notifications |
+| RX characteristic | `0xFFF2` | Phone → ESP32, write |
+
+Device name: **POD-9S**. Pairing is **Just Works**, without bond or encryption.
+The local MTU is set to 185 B, but the client may stay at the default 23 B; every
+message is designed to fit in 20 bytes.
+
+Notifications are only delivered after the client writes `0x01` to the CCCD of
+`0xFFF1`. When that happens the firmware announces:
+
+```text
+[POD 042] FW 2
+[POD 042] BOOTING TACTICAL SUPPORT UNIT...
+[POD 042] SYSTEM ONLINE.
+```
+
+---
+
+## Terminal reference
+
+The `idf.py monitor` terminal is **output-only**: you do not type commands there.
+It shows ESP-IDF logs and the UART traffic the ESP32 sends to the STM32.
+
+| Prefix / line | Meaning |
+|---|---|
+| `[BOOT] POD-9S build <date> <time>` | Firmware build banner |
+| `[HB]  STM32 alive` | Heartbeat acknowledged |
+| `[PWR] STM32 en STOP` / `STM32 despierto` | Sleep/wake transitions |
+| `[IMU] activado` / `[IMU] desactivado` | IMU state change |
+| `[IMU] R=… P=… L=… H=… M=… BLE=on/off` | Decoded telemetry at up to 10 Hz |
+| `[BAT] solicitando...` | Battery request |
+| `[BAT] <n> mV` | Battery voltage received |
+| `[BAT] error de lectura` | Battery error |
+| `[ADC] vref=… vbatt=… vdd=…` | Raw ADC values |
+| `[LED] ON` / `[LED] OFF` | LED state |
+| `[I2C] bus recuperado` / `no se pudo recuperar` | MPU bus recovery |
+| `[LIVE] ON` / `[LIVE] OFF` | Live mode |
+| `[TARE] cero borrado` / `no se pudo borrar` | Tare clear |
+| `[BLE] TX STM:…` | Command forwarded from the phone |
+| `[BTN] TARE` / `HOLD` / `MPU` | Command generated by the button |
+| `[CMD] STM32 dormido, se descarta: …` | Command dropped in STOP |
+| `[BLE] comando no valido: …` | Command rejected by the whitelist |
+| `TX: STM:…` | Raw UART transmission (tag `POD`) |
+| `[??] '…'` | Unexpected message from the STM32 |
+
+Example of a boot sequence (format, not a captured log):
+
+```text
+I (312) POD_FSM: [BOOT] POD-9S build Nov 14 2026 17:00:00
+I (320) BLE_UART: BLE UART iniciado
+I (1500) BLE_UART: Cliente conectado
+I (1510) BLE_UART: Notificaciones: ON
+I (2000) POD_FSM: [HB]  STM32 alive
+I (2000) POD: TX:	STM:BATT
+I (2100) POD_FSM: [IMU] R=1.2 P=0.7 L=1 H=0 M=0 BLE=on
+```
+
+---
+
+## Commands you can send over BLE
+
+Write one of these to character `0xFFF2` from a BLE serial app. They are
+**case-insensitive**, and the `STM:` prefix is optional.
+
+| Command | Action on the STM32 | BLE confirmation |
+|---|---|---|
+| `TARE` | Sets the current angle as relative zero | `[POD 042] CMD TARE` |
+| `TARECLR` | Erases the stored zero (BLE only) | `[POD 042] CMD TARECLR` |
+| `HOLD` | Toggles manual hold | `[POD 042] CMD HOLD` |
+| `MPU` | Toggles the IMU on/off | `[POD 042] CMD MPU` |
+| `PING` | Heartbeat | `[POD 042] CMD PING` |
+| `BATT` | Requests a battery measurement | `[POD 042] CMD BATT` |
+| `LED` | Toggles the LED when the IMU is inactive | `[POD 042] CMD LED` |
+| `LIVE` | Toggles live mode (bypasses auto-hold) | `[POD 042] CMD LIVE` |
+
+The whitelist exists on purpose: an unknown command would put the STM32 in its
+error state. Unknown input gets `[POD 042] CMD INVALID`; commands received while
+the STM32 is in STOP get `[POD 042] STM SLEEPING`.
+
+`TARECLR` is intentionally **BLE-only**: there is no button gesture for it.
+
+---
+
+## BLE notifications
+
+| Message | Meaning |
+|---|---|
+| `IMU R<deg×10> P<deg×10> L<0\|1>` | Level telemetry at 2 Hz |
+| `[POD 042] SYSTEM ONLINE` | Firmware ready |
+| `[POD 042] LINK ESTABLISHED` | Client connected |
+| `[POD 042] OPERATOR STATUS: ACTIVE` / `IDLE` | IMU on/off |
+| `[POD 042] BATT: <n> mV` / `BATT: ERR` | Battery |
+| `[POD 042] I2C RECOVER` / `I2C FAIL` | Bus recovery result |
+| `[POD 042] LIVE ON` / `LIVE OFF` | Live mode |
+| `[POD 042] TARE CLEAR` / `TARE ERR` | Tare clear result |
+| `[POD 042] CMD <name>` | Command accepted |
+| `[POD 042] BTN <name>` | Command generated by the button |
+| `[POD 042] STM: SLEEP` / `STM: WAKE` | STM32 power state |
+| `[POD 042] CMD INVALID` | Command outside the whitelist |
+| `[POD 042] STM SLEEPING` | Command dropped because the STM32 is asleep |
+
+### Telemetry format
+
+```text
+IMU R-103 P25 L0
+```
+
+means roll **−10.3°**, pitch **+2.5°**, level **off**. The values are sent as
+integers multiplied by 10; the phone app must divide by 10. The terminal log, in
+contrast, already prints degrees with one decimal.
+
+---
+
+## Build and flash
+
+```bash
+source ~/esp/esp-idf/export.sh
+
+idf.py set-target esp32
+idf.py menuconfig          # confirm the options above
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+Close the monitor with `Ctrl + ]`. Opening `/dev/ttyACM0` resets the ESP32; if
+you open the port from Python, set `ser.dtr = False; ser.rts = False` to avoid
+the reset.
+
+### Current size
+
+| Metric | Value |
+|---|---:|
+| `.text` | 476 342 B |
+| `.rodata` + `.appdesc` | 131 476 B |
+| **Application image** (`POD_042.bin`) | **731 520 B** |
+| App partition | 1 048 576 B (1 MB) |
+| Free in partition | 316 032 B (30 %) |
+| IRAM | 101 967 B of 131 072 (77.8 %) |
+| DRAM | 38 938 B of 124 580 (31.3 %) |
+
+The image fits with ~30 % headroom. It is built with ESP-IDF **v6.1-dev** in the
+current environment; the old README mentioned v5.5.1.
+
+---
+
+## Validation status
+
+The firmware builds and has been exercised on hardware in earlier sessions. The
+table separates what was actually used from what is only compiled.
+
+| Area | Status |
+|---|---|
+| BLE advertising, connection and notifications | Exercised on hardware in earlier sessions |
+| UART parsing, heartbeat and battery requests | Exercised on hardware in earlier sessions |
+| Button: short / long / double click | Exercised on hardware in earlier sessions |
+| Command forwarding from the phone | Exercised on hardware in earlier sessions |
+| `TARE` / `TARECLR` over BLE | Validated on hardware (STM32 side) |
+| Handling of `IMU:I2C:RECOVER` / `IMU:I2C:FAIL` | **Built; pending hardware validation** |
+| Roll crossing ±180° as shown to the phone | Depends on the STM32; **pending** |
+| 2 Hz BLE cadence | Fixed by code; not measured over the air |
+| Message integrity at the default 23-byte MTU | **Not explicitly verified**; messages fit in 20 bytes by design |
+| Absolute accuracy | Not applicable: the ESP32 only relays |
+
+There is no automated test suite. Validation is done by flashing the board and
+watching the terminal and the BLE app. Evidence captures, when available, go in
+the `docs/evidence/` folder of the `stm32` branch.
+
+---
+
+## Known limitations
+
+- **No BLE security.** Pairing is Just Works, without bonding or encryption.
+- **One client at a time.** The profile accepts a single connection.
+- **Notifications require the CCCD.** Without writing `0x01` to `0xFFF1`, the
+  phone receives nothing.
+- **Commands are dropped while the STM32 sleeps.** The UART is not armed in STOP
+  mode; the first click only wakes the STM32.
+- **Telemetry is raw ×10**, not degrees.
+- **Default MTU is 23 bytes.** Messages are kept under 20 bytes, so a larger MTU
+  only helps with longer commands.
+- **Terminal log and BLE are different rates:** up to 10 Hz on the terminal,
+  2 Hz over BLE.
+- **Legacy modules** `GPS_IDF.c` and `modulo.c` are compiled but unused.
+- **`sdkconfig` uses Debug optimization.** Switch to Release for a final image.
+- **No OTA partition.** The layout is single-app; updating requires flashing over
+  USB.
+- **The 2 MB flash setting** must match the module; a different board needs a new
+  partition layout.
+
+---
+
+## AI assistance
+
+Parts of the firmware, documentation and host-side test harnesses were prepared
+with the help of an AI coding agent (OpenCode). The design decisions, hardware
+assembly, flashing and physical validation were performed by the author.
+AI-assisted changes were reviewed and compiled; their hardware status is stated
+explicitly in [Validation status](#validation-status).
+
 ---
 
 ## License
@@ -115,5 +417,8 @@ Released under the [MIT License](LICENSE).
 
 ---
 
-> ⚠️ Work in progress — active development.
-   
+## Related
+
+- STM32 sensor firmware: `stm32` branch of this repository.
+- The angle measurement, tare persistence and I2C recovery live on the STM32;
+  this firmware only transports and exposes them.
